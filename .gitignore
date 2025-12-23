@@ -1,0 +1,23 @@
+# 可执行文件
+*.exe
+
+# 编译生成的目标文件
+*.o
+*.obj
+
+# 库文件
+*.a
+*.lib
+
+# 编译器生成的临时文件
+*.d
+*.suo
+*.user
+*.sln.docstates
+
+# Visual Studio 缓存/选项目录
+.vs/
+
+# 其他常见的编译产物
+*.out
+*.app
