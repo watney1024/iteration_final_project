@@ -172,3 +172,24 @@ latex排版，首页写上标题、学号、姓名，不少于 6页 A4纸。
 2. [https://github.com/jihoonakang/parallel_tdma_cpp.git](https://github.com/jihoonakang/parallel_tdma_cpp.git)
 
 3. [https://github.com/tanim72/15418-final-project.git](https://github.com/tanim72/15418-final-project.git)
+
+
+
+
+
+
+
+# 2025年12月23日
+
+初步完成了代码的创建，主要为3部分
+
+1. 之前的神经网络算子
+2. gauss seidel
+3. Thomas算法
+
+接下来需要做的事：
+
+1. 确定合适的数据集规模
+2. 搞清楚代码结构
+3. 多跑实验
+4. 看看有没有其他优化方法，比如share memory等操作，进行消融实验
