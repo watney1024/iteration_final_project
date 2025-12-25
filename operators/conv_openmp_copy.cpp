@@ -7,7 +7,7 @@
 #include <random>
 #include <cstring>
 #include <algorithm>
-#include <omp.h>
+//#include <omp.h>
 
 #if defined(_WIN32)
 #define PATH_SEPARATOR "\\\\"
@@ -216,7 +216,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
                 //#pragma omp parallel for
                 for (int h = 0; h < input.height; h += conv_stride[0])
                 {
-                    #pragma omp parallel for
+                    //#pragma omp parallel for
                     for (int w = 0; w < input.width; w += conv_stride[1])
                     {
                         int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
@@ -257,7 +257,7 @@ int main(int argc, char* argv[])
             num_threads = 20;
         }
     }
-    omp_set_num_threads(num_threads);
+    //omp_set_num_threads(num_threads);
     std::cout << "Using " << num_threads << " threads" << std::endl;
     
     std::vector<float> conv2_weight(32 * 3 * 5 * 5);

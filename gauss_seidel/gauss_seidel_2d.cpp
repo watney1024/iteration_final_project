@@ -86,7 +86,7 @@ void GaussSeidel2D::solve_serial_redblack(
     }
 }
 
-// 并行红黑 Gauss-Seidel（基于区域分解 + 多级分块）
+// 并行红黑 Gauss-Seidel（优化版本）
 void GaussSeidel2D::solve_parallel_redblack(
     std::vector<double>& u,
     const std::vector<double>& f,
@@ -101,69 +101,67 @@ void GaussSeidel2D::solve_parallel_redblack(
     double h2 = h * h;
     omp_set_num_threads(num_threads);
     
-    // 分块策略：将区域划分为多个块
-    // 参考论文：每个线程负责一个或多个块
-    // 这里采用二级分块：
-    //   - 第一级：将整个区域分成 num_threads 个大块（按行分）
-    //   - 第二级：每个大块内部再分成小块以提高缓存效率
+    // 关键优化点：
+    // 1. 红黑点分开循环避免分支预测失败
+    // 2. 静态调度减少线程管理开销  
+    // 3. 定期检查残差避免过度同步
+    // 4. 使用firstprivate减少共享变量访问
     
-    const int tile_size = 32;  // 增大块大小，减少调度次数
+    const int check_interval = 10;  // 每10次迭代检查一次（提高检查频率）
     
-    for (int iter = 0; iter < max_iter; ++iter) {
-        // 红点更新阶段
-        #pragma omp parallel num_threads(num_threads)
-        {
-            // 按块迭代，每个线程处理多个块
+    // 关键优化：将parallel region移到循环外，避免重复创建线程
+    #pragma omp parallel num_threads(num_threads) firstprivate(h2)
+    {
+        for (int iter = 0; iter < max_iter; ++iter) {
+            // 红点更新 - nowait避免隐式栅障
             #pragma omp for schedule(static) nowait
-            for (int block_i = 1; block_i <= N; block_i += tile_size) {
-                int i_end = std::min(block_i + tile_size, N + 1);
-                for (int block_j = 1; block_j <= N; block_j += tile_size) {
-                    int j_end = std::min(block_j + tile_size, N + 1);
-                    
-                    // 在块内更新红点
-                    for (int i = block_i; i < i_end; ++i) {
-                        for (int j = block_j; j < j_end; ++j) {
-                            if ((i + j) % 2 == 0) {
-                                U(i, j) = 0.25 * (U(i-1, j) + U(i+1, j) + 
-                                                  U(i, j-1) + U(i, j+1) + 
-                                                  h2 * F(i-1, j-1));
-                            }
-                        }
+            for (int i = 1; i <= N; ++i) {
+                // 根据行号决定起始列，避免if (i+j)%2判断
+                int j_start = (i % 2 == 1) ? 1 : 2;
+                for (int j = j_start; j <= N; j += 2) {
+                    U(i, j) = 0.25 * (U(i-1, j) + U(i+1, j) + 
+                                      U(i, j-1) + U(i, j+1) + 
+                                      h2 * F(i-1, j-1));
+                }
+            }
+            
+            // 显式栅障：确保红点全部更新完
+            #pragma omp barrier
+            
+            // 黑点更新 - nowait避免隐式栅障
+            #pragma omp for schedule(static) nowait
+            for (int i = 1; i <= N; ++i) {
+                int j_start = (i % 2 == 1) ? 2 : 1;
+                for (int j = j_start; j <= N; j += 2) {
+                    U(i, j) = 0.25 * (U(i-1, j) + U(i+1, j) + 
+                                      U(i, j-1) + U(i, j+1) + 
+                                      h2 * F(i-1, j-1));
+                }
+            }
+            
+            // 显式栅障：确保黑点全部更新完
+            #pragma omp barrier
+            
+            // 只在master线程检查收敛
+            #pragma omp master
+            {
+                if (iter % check_interval == check_interval - 1) {
+                    residual = compute_residual(u, f, N, h);
+                    if (residual < tol) {
+                        iter_count = iter + 1;
+                        max_iter = iter;  // 提前终止所有线程
                     }
                 }
             }
+            // 确保所有线程同步max_iter的更新
+            #pragma omp barrier
         }
-        
-        // 黑点更新阶段
-        #pragma omp parallel num_threads(num_threads)
-        {
-            #pragma omp for schedule(static) nowait
-            for (int block_i = 1; block_i <= N; block_i += tile_size) {
-                int i_end = std::min(block_i + tile_size, N + 1);
-                for (int block_j = 1; block_j <= N; block_j += tile_size) {
-                    int j_end = std::min(block_j + tile_size, N + 1);
-                    
-                    // 在块内更新黑点
-                    for (int i = block_i; i < i_end; ++i) {
-                        for (int j = block_j; j < j_end; ++j) {
-                            if ((i + j) % 2 == 1) {
-                                U(i, j) = 0.25 * (U(i-1, j) + U(i+1, j) + 
-                                                  U(i, j-1) + U(i, j+1) + 
-                                                  h2 * F(i-1, j-1));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 计算残差（并行化）
-        residual = compute_residual(u, f, N, h);
-        iter_count = iter + 1;
-        
-        if (residual < tol) {
-            break;
-        }
+    }
+    
+    // 最终计算残差（注意：只在未break时设置iter_count）
+    residual = compute_residual(u, f, N, h);
+    if (iter_count == 0) {  // 未break，说明跑完所有迭代
+        iter_count = max_iter;
     }
 }
 

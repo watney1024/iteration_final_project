@@ -1,0 +1,297 @@
+#include <cmath>
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <chrono>
+#include <time.h> 
+#include <random>
+#include <cstring>
+#include <algorithm>
+#include <omp.h>
+
+#if defined(_WIN32)
+#define PATH_SEPARATOR "\\\\"
+#else
+#define PATH_SEPARATOR "/"
+#include <malloc.h>
+#endif
+
+struct Mat
+{
+public:
+    std::vector<float> tensor;
+
+    int dim;
+    int channel;
+    int height;
+    int width;
+
+    Mat() : dim(1), channel(3), height(150), width(150) {
+        tensor.resize(dim * channel * height * width);
+    }
+
+    // 多态构造函数
+    Mat(int d, int c, int h, int w) : dim(d), channel(c), height(h), width(w) {
+        tensor.resize(d * c * h * w);
+    }
+
+    float& operator[](size_t index)
+    {
+        return tensor[index];
+    }
+
+    const float& operator[](size_t index) const
+    {
+        return tensor[index];
+    }
+};
+
+std::vector<int> padding;
+std::vector<int> kernel_size;
+std::vector<int> stride;
+std::vector<int> dilation;
+
+double get_current_time()
+{
+    auto now = std::chrono::high_resolution_clock::now();
+    auto usec = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch());
+    return usec.count() / 1000.0;
+}
+
+void pretensor(Mat& input)
+{
+    for (int i = 0; i < input.channel; ++i)
+    {
+        for (int j = 0; j < input.height; ++j)
+        {
+            for (int k = 0; k < input.width; ++k)
+            {
+                int index = i * input.height * input.width + j * input.width + k;
+                float value = std::sin(static_cast<float>(index));
+                input[index] = value;
+            }
+        }
+    }
+}
+
+void printMat(Mat& mat)
+{
+    for (int d = 0; d < mat.dim; ++d)
+    {
+        for (int c = 0; c < mat.channel; ++c)
+        {
+            for (int h = 0; h < mat.height; ++h)
+            {
+                for (int w = 0; w < mat.width; ++w)
+                {
+                    int index = d * mat.channel * mat.height * mat.width + c * mat.height * mat.width + h * mat.width + w;
+                    printf("%.5lf ", mat[index]);
+                }
+                std::puts("");
+            }
+            std::puts("");
+        }
+
+        std::puts("");
+    }
+    std::puts("");
+}
+
+// Optimized avgpool with memory and access pattern optimization
+double avgp(const Mat &input, Mat &output, std::vector<int> avgp_kernel_size, std::vector<int> avgp_stride)
+{
+    double start = get_current_time();
+    int input_h = input.height;
+    int input_w = input.width;
+    int out_h = output.height;
+    int out_w = output.width;
+    
+    int kernel_h = avgp_kernel_size[0];
+    int kernel_w = avgp_kernel_size[1];
+    int stride_h = avgp_stride[1];
+    int stride_w = avgp_stride[0];
+    
+    // Precompute sizes
+    int input_hw = input_h * input_w;
+    int output_hw = out_h * out_w;
+    
+    // Check if we can use specialized 2x2 kernel optimization
+    bool use_2x2_optimized = (kernel_h == 2 && kernel_w == 2 && 
+                               stride_h == 2 && stride_w == 2);
+    
+    for (int d = 0; d < input.dim; ++d)
+    {
+        // Parallelize over channels - optimal granularity
+        #pragma omp parallel for
+        for (int c = 0; c < input.channel; ++c)
+        {
+            // Precompute channel offsets using pointers
+            const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
+            float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
+            
+            if (use_2x2_optimized)
+            {
+                // Specialized optimization for 2x2 kernel with stride 2
+                // Unroll kernel loops for better performance
+                for (int oh = 0; oh < out_h; ++oh)
+                {
+                    for (int ow = 0; ow < out_w; ++ow)
+                    {
+                        // Input coordinates
+                        int h_start = oh * 2;
+                        int w_start = ow * 2;
+                        
+                        // Check if all 4 pixels are within bounds
+                        if (h_start + 1 < input_h && w_start + 1 < input_w)
+                        {
+                            // Direct access to 4 pixels in 2x2 kernel
+                            int idx_00 = h_start * input_w + w_start;
+                            int idx_01 = idx_00 + 1;
+                            int idx_10 = idx_00 + input_w;
+                            int idx_11 = idx_10 + 1;
+                            
+                            // Compute average of 4 pixels
+                            float sum = input_channel_ptr[idx_00] + 
+                                       input_channel_ptr[idx_01] + 
+                                       input_channel_ptr[idx_10] + 
+                                       input_channel_ptr[idx_11];
+                            
+                            output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // Multiply instead of divide
+                        }
+                        else
+                        {
+                            // Boundary case - use general approach
+                            float sum = 0.0f;
+                            int count = 0;
+                            for (int kh = 0; kh < 2; ++kh)
+                            {
+                                for (int kw = 0; kw < 2; ++kw)
+                                {
+                                    int h = h_start + kh;
+                                    int w = w_start + kw;
+                                    if (h < input_h && w < input_w)
+                                    {
+                                        sum += input_channel_ptr[h * input_w + w];
+                                        count++;
+                                    }
+                                }
+                            }
+                            output_channel_ptr[oh * out_w + ow] = sum / count;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // General case for arbitrary kernel sizes
+                for (int oh = 0; oh < out_h; ++oh)
+                {
+                    for (int ow = 0; ow < out_w; ++ow)
+                    {
+                        float sum = 0.0f;
+                        int count = 0;
+                        
+                        int h_start = oh * stride_h;
+                        int w_start = ow * stride_w;
+                        
+                        for (int kh = 0; kh < kernel_h; ++kh)
+                        {
+                            for (int kw = 0; kw < kernel_w; ++kw)
+                            {
+                                int h = h_start + kh;
+                                int w = w_start + kw;
+                                if (h < input_h && w < input_w)
+                                {
+                                    sum += input_channel_ptr[h * input_w + w];
+                                    count++;
+                                }
+                            }
+                        }
+                        output_channel_ptr[oh * out_w + ow] = sum / count;
+                    }
+                }
+            }
+        }
+    }
+    double end = get_current_time();
+    return (end - start);
+}
+
+
+int main(int argc, char* argv[])
+{
+    // Memory optimization: reduce page faults and memory fragmentation
+    #if !defined(_WIN32) && defined(M_MMAP_MAX) && defined(M_TRIM_THRESHOLD)
+    mallopt(M_MMAP_MAX, 0);           // Disable mmap for malloc
+    mallopt(M_TRIM_THRESHOLD, -1);    // Disable memory trimming
+    // std::cout << "Memory optimization: Enabled (mallopt)" << std::endl;
+    // #else
+    // std::cout << "Memory optimization: Skipped (mallopt not available on this platform)" << std::endl;
+    #endif
+    
+    // Get thread count from command line argument
+    int num_threads = omp_get_max_threads();
+    if (argc > 1)
+    {
+        num_threads = std::atoi(argv[1]);
+        if (num_threads <= 0)
+        {
+            std::cerr << "Invalid thread count. Using default: " << omp_get_max_threads() << std::endl;
+            num_threads = omp_get_max_threads();
+        }
+    }
+    omp_set_num_threads(num_threads);
+    std::cout << "Using " << num_threads << " threads (Memory Optimized)" << std::endl;
+    
+    padding.assign(0, 0);     
+    kernel_size.assign(2, 2); 
+    stride.assign(2, 2);      
+
+    Mat mp1_input(1, 320, 300, 300);
+    Mat mp1_output(1, 320, 150, 150);
+
+    pretensor(mp1_input);
+    
+    // Run 250 iterations: 50 warmup + 200 for statistics
+    const int total_iterations = 250;
+    const int warmup_iterations = 50;
+    double times[total_iterations];
+    
+    for (int i = 0; i < total_iterations; ++i)
+    {
+        // Reset output matrix
+        std::fill(mp1_output.tensor.begin(), mp1_output.tensor.end(), 0);
+        times[i] = avgp(mp1_input, mp1_output, kernel_size, stride);
+    }
+    
+    // Extract and sort times after warmup
+    const int valid_count = total_iterations - warmup_iterations;
+    std::vector<double> valid_times(valid_count);
+    for (int i = 0; i < valid_count; ++i)
+    {
+        valid_times[i] = times[warmup_iterations + i];
+    }
+    std::sort(valid_times.begin(), valid_times.end());
+    
+    // Calculate median (50th percentile)
+    double median;
+    if (valid_count % 2 == 0)
+    {
+        median = (valid_times[valid_count / 2 - 1] + valid_times[valid_count / 2]) / 2.0;
+    }
+    else
+    {
+        median = valid_times[valid_count / 2];
+    }
+    
+    // Calculate P99 (99th percentile)
+    int p99_index = (int)(valid_count * 0.99) - 1;
+    if (p99_index < 0) p99_index = 0;
+    if (p99_index >= valid_count) p99_index = valid_count - 1;
+    double p99 = valid_times[p99_index];
+    
+    std::cout << "Median time (after warmup): " << median << " ms" << std::endl;
+    std::cout << "P99 time (after warmup): " << p99 << " ms" << std::endl;
+
+    return 0;
+}

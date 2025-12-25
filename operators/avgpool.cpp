@@ -6,6 +6,7 @@
 #include <time.h> 
 #include <random>
 #include <cstring>
+#include <algorithm>
 #include <omp.h>
 struct Mat
 {
@@ -95,14 +96,11 @@ double avgp(const Mat &input, Mat &output, std::vector<int> avgp_kernel_size, st
     int input_w = input.width;
     int out_h = output.height;
     int out_w = output.width;
-    //#pragma omp paralle for
+
     for (int d = 0; d < input.dim; ++d)
     {
-        //#pragma omp parallel for
-        #pragma  parallel for
         for (int c = 0; c < input.channel; ++c)
         {
-            //#pragma omp parallel for
             for (int oh = 0; oh < out_h; ++oh)
             {
                 for (int ow = 0; ow < out_w; ++ow)
@@ -143,8 +141,47 @@ int main()
     Mat mp1_output(1, 320, 150, 150);
 
     pretensor(mp1_input);
-    for (int cc = 0;cc<10;++cc)
-        std::cout<< avgp(mp1_input, mp1_output,kernel_size, stride)<<std::endl;//用sin生成的数据测试
+    
+    // 进行250次测试，前50次预热，后200次计算中位数和P99
+    const int total_iterations = 250;
+    const int warmup_iterations = 50;
+    double times[total_iterations];
+    
+    for (int i = 0; i < total_iterations; ++i)
+    {
+        // 重置输出矩阵
+        std::fill(mp1_output.tensor.begin(), mp1_output.tensor.end(), 0);
+        times[i] = avgp(mp1_input, mp1_output, kernel_size, stride);
+    }
+    
+    // 提取后200次的时间数据并排序
+    const int valid_count = total_iterations - warmup_iterations;
+    std::vector<double> valid_times(valid_count);
+    for (int i = 0; i < valid_count; ++i)
+    {
+        valid_times[i] = times[warmup_iterations + i];
+    }
+    std::sort(valid_times.begin(), valid_times.end());
+    
+    // 计算中位数（第50百分位）
+    double median;
+    if (valid_count % 2 == 0)
+    {
+        median = (valid_times[valid_count / 2 - 1] + valid_times[valid_count / 2]) / 2.0;
+    }
+    else
+    {
+        median = valid_times[valid_count / 2];
+    }
+    
+    // 计算P99（第99百分位）
+    int p99_index = (int)(valid_count * 0.99) - 1;
+    if (p99_index < 0) p99_index = 0;
+    if (p99_index >= valid_count) p99_index = valid_count - 1;
+    double p99 = valid_times[p99_index];
+    
+    std::cout << "Median time (after warmup): " << median << " ms" << std::endl;
+    std::cout << "P99 time (after warmup): " << p99 << " ms" << std::endl;
     //printMat(mp1_input);
     //printMat(mp1_output);
 

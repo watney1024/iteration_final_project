@@ -6,6 +6,7 @@
 #include <time.h> 
 #include <random>
 #include <cstring>
+#include <algorithm>
 #include <omp.h>
 
 #if defined(_WIN32)
@@ -249,9 +250,46 @@ int main()
     readBinaryFile(conv2_bias_path, conv2_bias);
     pretensor(conv2_input);
     
-    //for (int cc = 0;cc<5;++cc)
-        //std::cout<<conv2d(conv2_input,conv2_output,conv2_weight,conv2_bias,conv_kernel_size,conv_stride,padding)<<std::endl;
-    conv2d(conv2_input,conv2_output,conv2_weight,conv2_bias,conv_kernel_size,conv_stride,padding);
-    printMat(conv2_output);
+    // 进行250次测试，前50次预热，后200次计算中位数和P99
+    const int total_iterations = 250;
+    const int warmup_iterations = 50;
+    double times[total_iterations];
+    
+    for (int i = 0; i < total_iterations; ++i)
+    {
+        // 重置输出矩阵
+        std::fill(conv2_output.tensor.begin(), conv2_output.tensor.end(), 0);
+        times[i] = conv2d(conv2_input, conv2_output, conv2_weight, conv2_bias, conv_kernel_size, conv_stride, padding);
+    }
+    
+    // 提取后200次的时间数据并排序
+    const int valid_count = total_iterations - warmup_iterations;
+    std::vector<double> valid_times(valid_count);
+    for (int i = 0; i < valid_count; ++i)
+    {
+        valid_times[i] = times[warmup_iterations + i];
+    }
+    std::sort(valid_times.begin(), valid_times.end());
+    
+    // 计算中位数（第50百分位）
+    double median;
+    if (valid_count % 2 == 0)
+    {
+        median = (valid_times[valid_count / 2 - 1] + valid_times[valid_count / 2]) / 2.0;
+    }
+    else
+    {
+        median = valid_times[valid_count / 2];
+    }
+    
+    // 计算P99（第99百分位）
+    int p99_index = (int)(valid_count * 0.99) - 1;
+    if (p99_index < 0) p99_index = 0;
+    if (p99_index >= valid_count) p99_index = valid_count - 1;
+    double p99 = valid_times[p99_index];
+    
+    std::cout << "Median time (after warmup): " << median << " ms" << std::endl;
+    std::cout << "P99 time (after warmup): " << p99 << " ms" << std::endl;
+    //printMat(conv2_output);
     return 0;
 }

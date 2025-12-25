@@ -13,6 +13,7 @@
 #define PATH_SEPARATOR "\\\\"
 #else
 #define PATH_SEPARATOR "/"
+#include <malloc.h>
 #endif
 
 #include <vector>
@@ -155,17 +156,14 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
               const std::vector<int> &conv_kernel_size, const std::vector<int> &conv_stride, int conv_padding)
 {
     double start = get_current_time();
-    int weight_pos = 0;
     int conv_kernel_max = conv_kernel_size[0] * conv_kernel_size[1];
     Mat padded_mat = padd(input, conv_padding);
-    float sum = 0;
-    int cnt[1000];
-    memset(cnt, 0, sizeof cnt);
+    
+    // 预计算偏移量数组
     int dx[25];
     memset(dx, 0, sizeof dx);
     if (conv_kernel_max == 9)
     {
-        // 直接初始化数组的前9个元素
         dx[0] = 0;
         dx[1] = 1;
         dx[2] = 2;
@@ -204,39 +202,63 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
         dx[23] = 4 * padded_mat.width + 3;
         dx[24] = 4 * padded_mat.width + 4;
     }
-    //#pragma omp parallel for
-    for (int i = 0; i < output.channel; ++i)
+    
+    int output_h = output.height;
+    int output_w = output.width;
+    int padded_h = padded_mat.height;
+    int padded_w = padded_mat.width;
+    int padded_hw = padded_h * padded_w;
+    int output_hw = output_h * output_w;
+    
+    // 并行化移到最外层：每个线程处理一个输出通道
+    #pragma omp parallel for
+    for (int oc = 0; oc < output.channel; ++oc)
     {
-        for (int d = 0; d < padded_mat.dim; ++d)
+        // 每个输出通道的起始位置
+        float* output_channel_ptr = &output.tensor[oc * output_hw];
+        
+        // 遍历输入通道
+        //#pragma omp parallel  for
+        for (int ic = 0; ic < padded_mat.channel; ++ic)
         {
-            //#pragma omp parallel for
-            for (int c = 0; c < padded_mat.channel; ++c)
+            // 当前输入通道和权重的起始位置
+            const float* input_channel_ptr = &padded_mat.tensor[ic * padded_hw];
+            const float* weight_ptr = &weight[(oc * padded_mat.channel + ic) * conv_kernel_max];
+            
+            // 遍历输出的每个位置（优化访存模式：先h后w，保证连续访问）
+            //#pragma omp parallel  for
+            for (int h = 0; h < output_h; h += conv_stride[0])
             {
-                int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
-                //#pragma omp parallel for
-                for (int h = 0; h < input.height; h += conv_stride[0])
+                //#pragma omp parallel  for
+                for (int w = 0; w < output_w; w += conv_stride[1])
                 {
-                    #pragma omp parallel for
-                    for (int w = 0; w < input.width; w += conv_stride[1])
+                    // 计算输入起始位置
+                    int input_base_idx = h * padded_w + w;
+                    
+                    // 使用局部变量累加，减少对output的写入
+                    float sum = 0.0f;
+                    
+                    // 卷积核计算（展开小循环提高效率）
+                    for (int k = 0; k < conv_kernel_max; ++k)
                     {
-                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
-                        int output_index = i * output.height * output.width + h * output.width + w;
-                        for (int m = 0; m < conv_kernel_max; ++m)
-                        {
-                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
-                        }
+                        sum += input_channel_ptr[input_base_idx + dx[k]] * weight_ptr[k];
                     }
+                    
+                    // 累加到输出（而非直接赋值）
+                    output_channel_ptr[h * output_w + w] += sum;
                 }
             }
         }
-    }
-    for (int i = 0; i < output.channel; ++i)
-    {
-        for (int j = 0; j < output.height * output.width; ++j)
+        
+        // 添加bias（在通道循环结束后统一添加）
+        float bias_value = bias[oc];
+        //#pragma omp parallel for
+        for (int i = 0; i < output_hw; ++i)
         {
-            output[i * output.height * output.width + j] += bias[i];
+            output_channel_ptr[i] += bias_value;
         }
     }
+    
     double end = get_current_time();
     return (end - start);
 }
@@ -246,7 +268,17 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
 
 int main(int argc, char* argv[])
 {
-    // 从命令行参数获取线程数，默认为20
+    // Memory optimization: reduce page faults and memory fragmentation
+    // Note: mallopt may not be available on all Windows/MinGW platforms
+    #if !defined(_WIN32) && defined(M_MMAP_MAX) && defined(M_TRIM_THRESHOLD)
+    mallopt(M_MMAP_MAX, 0);           // Disable mmap for malloc
+    mallopt(M_TRIM_THRESHOLD, -1);    // Disable memory trimming
+    //std::cout << "Memory optimization: Enabled (mallopt)" << std::endl;
+    //#else
+    //std::cout << "Memory optimization: Skipped (mallopt not available on this platform)" << std::endl;
+    #endif
+    
+    // Get thread count from command line argument, default is 20
     int num_threads = 20;
     if (argc > 1)
     {
@@ -258,7 +290,7 @@ int main(int argc, char* argv[])
         }
     }
     omp_set_num_threads(num_threads);
-    std::cout << "Using " << num_threads << " threads" << std::endl;
+    std::cout << "Using " << num_threads << " threads (Memory Optimized)" << std::endl;
     
     std::vector<float> conv2_weight(32 * 3 * 5 * 5);
     std::vector<float> conv2_bias(32);
