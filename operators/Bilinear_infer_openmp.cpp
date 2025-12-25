@@ -484,11 +484,11 @@ double avgp(const Mat &input, Mat &output, std::vector<int> avgp_kernel_size, st
     int input_w = input.width;
     int out_h = output.height;
     int out_w = output.width;
-    #pragma omp parallel for
     for (int d = 0; d < input.dim; ++d)
     {
         for (int c = 0; c < input.channel; ++c)
         {
+            #pragma omp parallel for
             for (int oh = 0; oh < out_h; ++oh)
             {
                 for (int ow = 0; ow < out_w; ++ow)
@@ -782,7 +782,7 @@ int forward(Mat &input, int i)
 int main()
 {
     // output = 0.153745
-    //omp_set_num_threads(4);
+    omp_set_num_threads(20);
     preread();
     // pretensor(conv1_input);
     // forward(conv1_input,0);
