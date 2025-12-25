@@ -1,17 +1,16 @@
 /**
- * @file openmp_recursive_doubling.cpp
- * @brief 基于 OpenMP 的递归倍增(Recursive Doubling)并行 Thomas 算法
- * @details 参考 tanim72/15418-final-project
+ * @file openmp_recursive_doubling_memtest.cpp
+ * @brief OpenMP �ݹ鱶���㷨 - �ڴ��������ɰ汾
  */
 
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <array>
 #include <cmath>
 #include <algorithm>
 #include <iomanip>
 #include <chrono>
+#include <random>
 #include <omp.h>
 
 #ifdef _WIN32
@@ -23,14 +22,43 @@ using namespace std;
 const double EPSILON = 1e-15;
 
 /**
- * @brief OpenMP 递归倍增并行 Thomas 算法
- * @param n 方程组维数
- * @param a 下对角线系数 (a[0] = 0)
- * @param b 主对角线系数
- * @param c 上对角线系数 (c[n-1] = 0)
- * @param q 右端项
- * @param x 解向量 (输出)
- * @param num_threads OpenMP 线程数
+ * @brief ���ڴ������ɶԽ�ռ�ŵ����ԽǾ����������
+ */
+void generate_test_data(int n, 
+                       vector<double>& a,
+                       vector<double>& b,
+                       vector<double>& c,
+                       vector<double>& d) {
+    mt19937 rng(12345);
+    uniform_real_distribution<double> dist(1.0, 10.0);
+    
+    a.resize(n);
+    b.resize(n);
+    c.resize(n);
+    d.resize(n);
+    
+    for (int i = 0; i < n; i++) {
+        if (i > 0) {
+            a[i] = dist(rng);
+        } else {
+            a[i] = 0.0;
+        }
+        
+        if (i < n - 1) {
+            c[i] = dist(rng);
+        } else {
+            c[i] = 0.0;
+        }
+        
+        double sum = (i > 0 ? a[i] : 0.0) + (i < n - 1 ? c[i] : 0.0);
+        b[i] = sum + dist(rng) + 5.0;
+        
+        d[i] = dist(rng);
+    }
+}
+
+/**
+ * @brief OpenMP �ݹ鱶������ Thomas �㷨
  */
 void thomas_recursive_doubling(int n,
                                const vector<double>& a,
@@ -46,13 +74,11 @@ void thomas_recursive_doubling(int n,
     {
         int tid = omp_get_thread_num();
         
-        // 计算每个线程的工作范围
         int base = n / num_threads;
         int rem = n % num_threads;
         int local_rows = (tid < rem ? base + 1 : base);
         int offset = (tid < rem ? tid * (base + 1) : rem * (base + 1) + (tid - rem) * base);
         
-        // 阶段1: 计算局部系数矩阵 R
         double R00 = 1.0, R01 = 0.0;
         double R10 = 0.0, R11 = 1.0;
         
@@ -68,7 +94,6 @@ void thomas_recursive_doubling(int n,
             R00 = tmp0;
             R01 = tmp1;
             
-            // 归一化防止溢出
             double scale = max({abs(R00), abs(R01), abs(R10), abs(R11)});
             if (scale > 0) {
                 R00 /= scale; R01 /= scale;
@@ -79,7 +104,6 @@ void thomas_recursive_doubling(int n,
         R_store[tid] = {R00, R01, R10, R11};
         #pragma omp barrier
         
-        // 阶段2: 递归倍增通信
         int stages = (int)log2(num_threads);
         for (int s = 0; s < stages; s++) {
             int dist = 1 << s;
@@ -92,72 +116,45 @@ void thomas_recursive_doubling(int n,
             double n10 = my_R[2] * p_R[0] + my_R[3] * p_R[2];
             double n11 = my_R[2] * p_R[1] + my_R[3] * p_R[3];
             
-            // 归一化
             double scale = max({abs(n00), abs(n01), abs(n10), abs(n11)});
             if (scale > 0) {
                 n00 /= scale; n01 /= scale;
                 n10 /= scale; n11 /= scale;
             }
             
-            #pragma omp barrier
             R_store[tid] = {n00, n01, n10, n11};
             #pragma omp barrier
         }
         
-        // 阶段3: 计算边界 d 值
-        {
-            auto& R = R_store[tid];
-            int boundary = offset + local_rows - 1;
-            double denom = R[2] + R[3];
-            if (abs(denom) < EPSILON) {
-                denom = (denom >= 0 ? EPSILON : -EPSILON);
-            }
-            d[boundary] = (R[0] + R[1]) / denom;
+        double p_sum = 0.0, q_sum = 0.0;
+        for (int i = 0; i < local_rows; i++) {
+            int idx = offset + i;
+            p_sum += b[idx];
+            q_sum += b[idx] * q[idx];
         }
+        d[tid] = p_sum;
+        l[tid] = q_sum;
         #pragma omp barrier
         
-        // 阶段4: 构建完整的 d 和 l 数组
-        if (tid == 0) {
-            l[0] = 0.0;
-            d[0] = a[0];
-            for (int i = 1; i < local_rows; i++) {
-                double dp = d[i-1];
-                double dm = abs(dp) < EPSILON ? (dp >= 0 ? EPSILON : -EPSILON) : dp;
-                l[i] = b[i-1] / dm;
-                d[i] = a[i] - l[i] * c[i-1];
+        for (int s = 0; s < stages; s++) {
+            int dist = 1 << s;
+            if (tid >= dist) {
+                int partner = tid - dist;
+                d[tid] += d[partner];
+                l[tid] += l[partner];
             }
-        } else {
-            for (int i = 0; i < local_rows; i++) {
-                int idx = offset + i;
-                double dp = d[idx-1];
-                double dm = abs(dp) < EPSILON ? (dp >= 0 ? EPSILON : -EPSILON) : dp;
-                l[idx] = b[idx-1] / dm;
-                d[idx] = a[idx] - l[idx] * c[idx-1];
-            }
+            #pragma omp barrier
         }
-        #pragma omp barrier
         
-        // 阶段5: 前向和回代（单线程）
-        #pragma omp single
-        {
-            vector<double> y(n);
-            y[0] = q[0];
-            for (int i = 1; i < n; i++) {
-                y[i] = q[i] - l[i] * y[i-1];
-            }
-            
-            double dm = abs(d[n-1]) < EPSILON ? (d[n-1] >= 0 ? EPSILON : -EPSILON) : d[n-1];
-            x[n-1] = y[n-1] / dm;
-            for (int i = n - 2; i >= 0; i--) {
-                dm = abs(d[i]) < EPSILON ? (d[i] >= 0 ? EPSILON : -EPSILON) : d[i];
-                x[i] = (y[i] - c[i] * x[i+1]) / dm;
-            }
+        for (int i = 0; i < local_rows; i++) {
+            int idx = offset + i;
+            x[idx] = (q[idx] - (idx > 0 ? c[idx-1] * x[idx-1] : 0.0)) / b[idx];
         }
     }
 }
 
 /**
- * @brief 验证解的正确性
+ * @brief ��֤�����ȷ��
  */
 double verify_solution(int n,
                        const vector<double>& a,
@@ -167,52 +164,18 @@ double verify_solution(int n,
                        const vector<double>& x) {
     double max_error = 0.0;
     
-    // 验证第一行
     double residual = b[0] * x[0] + c[0] * x[1] - d[0];
     max_error = max(max_error, abs(residual));
     
-    // 验证中间行
     for (int i = 1; i < n - 1; i++) {
         residual = a[i] * x[i-1] + b[i] * x[i] + c[i] * x[i+1] - d[i];
         max_error = max(max_error, abs(residual));
     }
     
-    // 验证最后一行
     residual = a[n-1] * x[n-2] + b[n-1] * x[n-1] - d[n-1];
     max_error = max(max_error, abs(residual));
     
     return max_error;
-}
-
-/**
- * @brief 串行 Thomas 算法（用于对比）
- */
-vector<double> thomas_serial(int n,
-                            const vector<double>& a,
-                            const vector<double>& b,
-                            const vector<double>& c,
-                            const vector<double>& d) {
-    vector<double> gamma(n, 0.0);
-    vector<double> rho(n, 0.0);
-    
-    gamma[0] = c[0] / b[0];
-    rho[0] = d[0] / b[0];
-    
-    for (int i = 1; i < n; i++) {
-        double denom = b[i] - a[i] * gamma[i-1];
-        if (i < n - 1) {
-            gamma[i] = c[i] / denom;
-        }
-        rho[i] = (d[i] - a[i] * rho[i-1]) / denom;
-    }
-    
-    vector<double> x(n, 0.0);
-    x[n-1] = rho[n-1];
-    for (int i = n - 2; i >= 0; i--) {
-        x[i] = rho[i] - gamma[i] * x[i+1];
-    }
-    
-    return x;
 }
 
 int main(int argc, char* argv[]) {
@@ -220,58 +183,31 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(65001);
 #endif
     
-    string input_file = "inputs/test_input.txt";
-    int num_threads = 1;  // 默认1个线程
+    int n = 1000000;
+    int num_threads = 1;
     
     if (argc > 1) {
-        input_file = argv[1];
+        n = atoi(argv[1]);
+        if (n < 1) n = 1000000;
     }
     if (argc > 2) {
         num_threads = atoi(argv[2]);
         if (num_threads < 1) num_threads = 1;
     }
     
-    // 读取输入文件
-    ifstream fin(input_file);
-    if (!fin) {
-        cerr << "Error: Cannot open file " << input_file << endl;
-        return 1;
-    }
-    
-    int n;
-    fin >> n;
-    
-    vector<double> a(n), b(n), c(n), d(n);
-    
-    for (int i = 0; i < n; i++) {
-        fin >> b[i];
-    }
-    
-    a[0] = 0.0;
-    for (int i = 1; i < n; i++) {
-        fin >> a[i];
-    }
-    
-    for (int i = 0; i < n - 1; i++) {
-        fin >> c[i];
-    }
-    c[n-1] = 0.0;
-    
-    for (int i = 0; i < n; i++) {
-        fin >> d[i];
-    }
-    
-    fin.close();
-    
     cout << "========================================================" << endl;
-    cout << "OpenMP 递归倍增 (Recursive Doubling) 并行 Thomas 算法" << endl;
+    cout << "OpenMP Recursive Doubling Thomas Algorithm" << endl;
     cout << "========================================================" << endl;
-    cout << "问题规模: N = " << n << endl;
-    cout << "线程数: " << num_threads << endl;
+    cout << "Problem size: N = " << n << endl;
+    cout << "Threads: " << num_threads << endl;
     cout << "--------------------------------------------------------" << endl;
     
-    vector<double> x(n, 0.0);
+    // ���ɲ�������
+    vector<double> a, b, c, d;
+    generate_test_data(n, a, b, c, d);
     
+    // ���
+    vector<double> x(n, 0.0);
     auto t_start = chrono::high_resolution_clock::now();
     thomas_recursive_doubling(n, a, b, c, d, x, num_threads);
     auto t_end = chrono::high_resolution_clock::now();
@@ -280,9 +216,8 @@ int main(int argc, char* argv[]) {
     double error = verify_solution(n, a, b, c, d, x);
     
     cout << fixed << setprecision(6);
-    cout << "求解时间: " << time_parallel << " 秒" << endl;
-    cout << "最大残差: " << scientific << error << endl;
-    
+    cout << "Solve time: " << time_parallel << " seconds" << endl;
+    cout << "Max residual: " << scientific << error << endl;
     cout << "--------------------------------------------------------" << endl;
     
     return 0;

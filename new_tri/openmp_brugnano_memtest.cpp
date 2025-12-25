@@ -1,8 +1,6 @@
 /**
- * @file openmp_brugnano.cpp
- * @brief 基于 OpenMP 的 Brugnano 并行 Thomas 算法
- * @details 参考 tanim72/15418-final-project
- *          使用局部修改的 Thomas 算法 + 规约系统求解
+ * @file openmp_brugnano_memtest.cpp
+ * @brief �ڴ��������ɰ汾 - �����ļ�I/Oƿ��
  */
 
 #include <iostream>
@@ -12,6 +10,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <chrono>
+#include <random>
 #include <omp.h>
 
 #ifdef _WIN32
@@ -21,10 +20,45 @@
 using namespace std;
 
 /**
- * @brief 局部修改的 Thomas 算法
- * @details 对局部三对角系统进行特殊的前向消元和回代
- *          保留第一行和最后一行的信息用于构建规约系统
+ * @brief ���ڴ������ɶԽ�ռ�ŵ����ԽǾ����������
  */
+void generate_test_data(int n, 
+                       vector<double>& a,
+                       vector<double>& b,
+                       vector<double>& c,
+                       vector<double>& d) {
+    // ʹ�ù̶������Ա�֤���ظ���
+    mt19937 rng(12345);
+    uniform_real_distribution<double> dist(1.0, 10.0);
+    
+    a.resize(n);
+    b.resize(n);
+    c.resize(n);
+    d.resize(n);
+    
+    // ���ɶԽ�ռ�ž���
+    for (int i = 0; i < n; i++) {
+        if (i > 0) {
+            a[i] = dist(rng);  // �¶Խ���
+        } else {
+            a[i] = 0.0;
+        }
+        
+        if (i < n - 1) {
+            c[i] = dist(rng);  // �϶Խ���
+        } else {
+            c[i] = 0.0;
+        }
+        
+        // ���Խ��ߣ�ȷ���Խ�ռ��
+        double sum = (i > 0 ? a[i] : 0.0) + (i < n - 1 ? c[i] : 0.0);
+        b[i] = sum + dist(rng) + 5.0;  // ȷ�� |b[i]| > |a[i]| + |c[i]|
+        
+        // �Ҷ���
+        d[i] = dist(rng);
+    }
+}
+
 void modified_thomas_algorithm(int m, 
                                vector<double>& a,
                                vector<double>& b,
@@ -37,7 +71,6 @@ void modified_thomas_algorithm(int m,
         return;
     }
     
-    // 归一化前两行
     d[0] = d[0] / b[0];
     c[0] = c[0] / b[0];
     a[0] = a[0] / b[0];
@@ -48,7 +81,6 @@ void modified_thomas_algorithm(int m,
         a[1] = a[1] / b[1];
     }
     
-    // 前向消元
     for (int i = 2; i < m; i++) {
         double denom = b[i] - a[i] * c[i-1];
         if (abs(denom) < 1e-10) denom = 1e-10;
@@ -58,14 +90,12 @@ void modified_thomas_algorithm(int m,
         a[i] = -r * (a[i] * a[i-1]);
     }
     
-    // 回代（保留边界）
     for (int i = m - 3; i >= 1; i--) {
         d[i] = d[i] - c[i] * d[i+1];
         c[i] = -c[i] * c[i+1];
         a[i] = a[i] - c[i] * a[i+1];
     }
     
-    // 最终处理第一行
     if (m >= 2) {
         double r = 1.0 / (1.0 - a[1] * c[0]);
         d[0] = r * (d[0] - a[0] * d[1]);
@@ -74,9 +104,6 @@ void modified_thomas_algorithm(int m,
     }
 }
 
-/**
- * @brief 标准 Thomas 算法求解规约系统
- */
 void standard_thomas_solver(int size,
                            vector<double>& a,
                            vector<double>& b,
@@ -84,7 +111,6 @@ void standard_thomas_solver(int size,
                            vector<double>& d) {
     vector<double> gamma(size, 0.0);
     
-    // 前向消元
     gamma[0] = c[0] / b[0];
     d[0] = d[0] / b[0];
     
@@ -96,15 +122,11 @@ void standard_thomas_solver(int size,
         d[i] = (d[i] - a[i] * d[i-1]) / denom;
     }
     
-    // 回代
     for (int i = size - 2; i >= 0; i--) {
         d[i] = d[i] - gamma[i] * d[i+1];
     }
 }
 
-/**
- * @brief OpenMP Brugnano 并行 Thomas 算法
- */
 void thomas_brugnano(int n,
                     const vector<double>& global_a,
                     const vector<double>& global_b,
@@ -113,7 +135,6 @@ void thomas_brugnano(int n,
                     vector<double>& global_x,
                     int num_threads) {
     
-    // 计算每个线程的分块大小
     vector<int> chunk_sizes(num_threads);
     vector<int> start_indices(num_threads);
     
@@ -126,7 +147,6 @@ void thomas_brugnano(int n,
         cur += chunk_sizes[i];
     }
     
-    // 存储每个分块的边界系数
     vector<vector<double>> all_coefs(num_threads, vector<double>(6));
     
     #pragma omp parallel num_threads(num_threads)
@@ -135,7 +155,6 @@ void thomas_brugnano(int n,
         int start_idx = start_indices[tid];
         int m = chunk_sizes[tid];
         
-        // 复制局部数据
         vector<double> local_a(m), local_b(m), local_c(m), local_d(m);
         for (int i = 0; i < m; i++) {
             int gi = start_idx + i;
@@ -145,7 +164,6 @@ void thomas_brugnano(int n,
             local_d[i] = global_d[gi];
         }
         
-        // 应用修改的 Thomas 算法
         if (m == 1) {
             local_d[0] /= local_b[0];
             local_a[0] = local_c[0] = 0.0;
@@ -153,7 +171,6 @@ void thomas_brugnano(int n,
             modified_thomas_algorithm(m, local_a, local_b, local_c, local_d);
         }
         
-        // 存储边界系数 (第一行和最后一行)
         all_coefs[tid][0] = local_a[0];
         all_coefs[tid][1] = local_c[0];
         all_coefs[tid][2] = local_d[0];
@@ -163,16 +180,14 @@ void thomas_brugnano(int n,
         
         #pragma omp barrier
         
-        // 主线程构建并求解规约系统
         #pragma omp single
         {
             int R = 2 * num_threads;
             vector<double> ra(R, 0.0), rb(R, 1.0), rc(R, 0.0), rd(R);
             
-            // 构建规约系统
             for (int i = 0; i < num_threads; i++) {
-                int e1 = 2 * i;      // 分块起始
-                int e2 = 2 * i + 1;  // 分块结束
+                int e1 = 2 * i;
+                int e2 = 2 * i + 1;
                 
                 ra[e1] = all_coefs[i][0];
                 rc[e1] = all_coefs[i][1];
@@ -182,20 +197,15 @@ void thomas_brugnano(int n,
                 rd[e2] = all_coefs[i][5];
             }
             
-            // 连接相邻分块的边界
-            // 每个分块结束节点的 c 系数应该连到下一个分块的开始
             for (int i = 0; i < num_threads - 1; i++) {
-                int curr_end = 2 * i + 1;      // 当前分块的结束
-                int next_start = 2 * (i + 1);   // 下一个分块的开始
-                // 它们之间需要连接
+                int curr_end = 2 * i + 1;
+                int next_start = 2 * (i + 1);
                 rc[curr_end] = -ra[next_start];
                 ra[next_start] = -rc[curr_end];
             }
             
-            // 求解规约系统
             standard_thomas_solver(R, ra, rb, rc, rd);
             
-            // 将边界值放回全局解
             for (int i = 0; i < num_threads; i++) {
                 int s = start_indices[i];
                 int e = s + chunk_sizes[i] - 1;
@@ -206,23 +216,16 @@ void thomas_brugnano(int n,
         
         #pragma omp barrier
         
-        // 更新内部节点
         int s = start_idx;
         double d0 = global_x[s];
         double dN = global_x[s + m - 1];
         
         for (int i = 1; i < m - 1; i++) {
-            double local_d_i = local_d[i];
-            double local_a_i = local_a[i];
-            double local_c_i = local_c[i];
-            global_x[s + i] = local_d_i - local_a_i * d0 - local_c_i * dN;
+            global_x[s + i] = local_d[i] - local_a[i] * d0 - local_c[i] * dN;
         }
     }
 }
 
-/**
- * @brief 验证解的正确性
- */
 double verify_solution(int n,
                        const vector<double>& a,
                        const vector<double>& b,
@@ -245,105 +248,48 @@ double verify_solution(int n,
     return max_error;
 }
 
-/**
- * @brief 串行 Thomas 算法（用于对比）
- */
-vector<double> thomas_serial(int n,
-                            const vector<double>& a,
-                            const vector<double>& b,
-                            const vector<double>& c,
-                            const vector<double>& d) {
-    vector<double> gamma(n, 0.0);
-    vector<double> rho(n, 0.0);
-    
-    gamma[0] = c[0] / b[0];
-    rho[0] = d[0] / b[0];
-    
-    for (int i = 1; i < n; i++) {
-        double denom = b[i] - a[i] * gamma[i-1];
-        if (i < n - 1) {
-            gamma[i] = c[i] / denom;
-        }
-        rho[i] = (d[i] - a[i] * rho[i-1]) / denom;
-    }
-    
-    vector<double> x(n, 0.0);
-    x[n-1] = rho[n-1];
-    for (int i = n - 2; i >= 0; i--) {
-        x[i] = rho[i] - gamma[i] * x[i+1];
-    }
-    
-    return x;
-}
-
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(65001);
 #endif
     
-    string input_file = "inputs/test_input.txt";
-    int num_threads = 1;  // 默认1个线程
+    // �÷�: ./program <�����ģ> <�߳���>
+    int n = 1000000;  // Ĭ��100��
+    int num_threads = 1;
     
     if (argc > 1) {
-        input_file = argv[1];
+        n = atoi(argv[1]);
+        if (n < 1) n = 1000000;
     }
     if (argc > 2) {
         num_threads = atoi(argv[2]);
         if (num_threads < 1) num_threads = 1;
     }
     
-    // 读取输入文件
-    ifstream fin(input_file);
-    if (!fin) {
-        cerr << "Error: Cannot open file " << input_file << endl;
-        return 1;
-    }
-    
-    int n;
-    fin >> n;
-    
-    vector<double> a(n), b(n), c(n), d(n);
-    
-    for (int i = 0; i < n; i++) {
-        fin >> b[i];
-    }
-    
-    a[0] = 0.0;
-    for (int i = 1; i < n; i++) {
-        fin >> a[i];
-    }
-    
-    for (int i = 0; i < n - 1; i++) {
-        fin >> c[i];
-    }
-    c[n-1] = 0.0;
-    
-    for (int i = 0; i < n; i++) {
-        fin >> d[i];
-    }
-    
-    fin.close();
-    
     cout << "=====================================================" << endl;
-    cout << "OpenMP Brugnano 并行 Thomas 算法" << endl;
+    cout << "OpenMP Brugnano - Memory Test Version" << endl;
     cout << "=====================================================" << endl;
-    cout << "问题规模: N = " << n << endl;
-    cout << "线程数: " << num_threads << endl;
+    cout << "Problem size: N = " << n << endl;
+    cout << "Threads: " << num_threads << endl;
     cout << "-----------------------------------------------------" << endl;
     
+    // ���ɲ�������
+    vector<double> a, b, c, d;
+    generate_test_data(n, a, b, c, d);
+    
+    // ���
     vector<double> x(n, 0.0);
-    
-    auto t_start = chrono::high_resolution_clock::now();
+    auto solve_start = chrono::high_resolution_clock::now();
     thomas_brugnano(n, a, b, c, d, x, num_threads);
-    auto t_end = chrono::high_resolution_clock::now();
+    auto solve_end = chrono::high_resolution_clock::now();
+    double solve_time = chrono::duration<double>(solve_end - solve_start).count();
     
-    double time_parallel = chrono::duration<double>(t_end - t_start).count();
+    // ��֤
     double error = verify_solution(n, a, b, c, d, x);
     
     cout << fixed << setprecision(6);
-    cout << "求解时间: " << time_parallel << " 秒" << endl;
-    cout << "最大残差: " << scientific << error << endl;
-    
+    cout << "Solve time: " << solve_time << " seconds" << endl;
+    cout << "Max residual: " << scientific << error << endl;
     cout << "-----------------------------------------------------" << endl;
     
     return 0;
