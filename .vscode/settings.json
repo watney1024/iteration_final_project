@@ -1,5 +1,6 @@
 {
     "code-runner.executorMap": {
-        "cpp": "cd $dir && g++ -fopenmp -O2 -std=c++11 *.cpp -o $fileNameWithoutExt.exe && ./$fileNameWithoutExt.exe"
+        //"cpp": "cd $dir && g++ -fopenmp -O2 -std=c++11 *.cpp -o $fileNameWithoutExt.exe && ./$fileNameWithoutExt.exe"
+        "cpp": "cd $dir && g++ -fopenmp -O2 -std=c++11 $fileName -o $fileNameWithoutExt.exe && ./$fileNameWithoutExt.exe"
     }
 }
