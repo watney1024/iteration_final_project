@@ -207,6 +207,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
     //#pragma omp parallel for
     for (int i = 0; i < output.channel; ++i)
     {
+        //#pragma omp parallel for
         for (int d = 0; d < padded_mat.dim; ++d)
         {
             //#pragma omp parallel for

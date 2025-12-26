@@ -98,18 +98,21 @@ double avgp(const Mat &input, Mat &output, std::vector<int> avgp_kernel_size, st
     int out_w = output.width;
     for (int d = 0; d < input.dim; ++d)
     {
-        #pragma omp parallel  for
+        #pragma omp parallel for
         for (int c = 0; c < input.channel; ++c)
         {
             //#pragma omp parallel for
             for (int oh = 0; oh < out_h; ++oh)
             {
+                //#pragma omp parallel for
                 for (int ow = 0; ow < out_w; ++ow)
                 {
                     float sum = 0.0;
                     int count = 0;
+                    //#pragma omp parallel for
                     for (int kh = 0; kh < avgp_kernel_size[0]; ++kh)
                     {
+                        //#pragma omp parallel for
                         for (int kw = 0; kw < avgp_kernel_size[1]; ++kw)
                         {
                             int h = oh * avgp_stride[1] + kh;

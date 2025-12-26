@@ -42,7 +42,7 @@ Write-Host "? 3D程序编译成功" -ForegroundColor Green
 Write-Host ""
 
 # 测试参数
-$sizes2D = @(64, 128, 256, 512, 1024)
+$sizes2D = @(64, 128, 256, 512, 1024, 2048)
 $sizes3D = @(64, 128, 256, 512)
 $threads = @(1, 2, 4, 8, 10, 16, 20)
 

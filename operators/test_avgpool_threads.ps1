@@ -13,19 +13,19 @@ Write-Host ""
 # 定义测试的线程数
 $threadCounts = @(1, 2, 4, 8, 10, 16, 20)
 
-# 先测试串行版本
-Write-Host "Compiling avgpool.cpp (Serial version)..." -ForegroundColor Yellow
-g++ -O2 -std=c++11 avgpool.cpp -o avgpool.exe
+# # 先测试串行版本
+# Write-Host "Compiling avgpool.cpp (Serial version)..." -ForegroundColor Yellow
+# g++ -O2 -std=c++11 avgpool.cpp -o avgpool.exe
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Compilation successful!" -ForegroundColor Green
-    Write-Host "Running serial version..." -ForegroundColor Cyan
-    $serialOutput = .\avgpool.exe
-    Write-Host $serialOutput -ForegroundColor White
-    Write-Host ""
-} else {
-    Write-Host "Serial compilation failed!" -ForegroundColor Red
-}
+# if ($LASTEXITCODE -eq 0) {
+#     Write-Host "Compilation successful!" -ForegroundColor Green
+#     Write-Host "Running serial version..." -ForegroundColor Cyan
+#     $serialOutput = .\avgpool.exe
+#     Write-Host $serialOutput -ForegroundColor White
+#     Write-Host ""
+# } else {
+#     Write-Host "Serial compilation failed!" -ForegroundColor Red
+# }
 
 # 编译OpenMP版本
 Write-Host "Compiling avgpool_openmp.cpp..." -ForegroundColor Yellow
