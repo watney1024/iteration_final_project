@@ -1,10 +1,15 @@
-%!TeX program = xelatex
+% !TeX program = xelatex
 \documentclass[12pt,hyperref,a4paper,UTF8]{ctexart}
 \usepackage{SJTUReport}
 \usepackage{booktabs}  % 在导言区添加
-\usepackage[draft]{changes} % final 可以替换为 draft 查看标注效果
+\usepackage[commandnameprefix=always]{changes} % final 可以替换为 draft 查看标注效果
 \setaddedmarkup{\textcolor{red}{#1}} % 设置新增内容为红色
 \setdeletedmarkup{\textcolor{red}{\sout{#1}}} % 设置删除内容为红色并加删除线
+\let\comment\chcomment
+% 加载图片处理包（支持png/jpg/pdf等格式）
+\usepackage{graphicx}
+% 可选：设置图片根目录（简化路径，推荐）
+\graphicspath{{figures/}} % 表示所有图片默认从figures文件夹读取
 %%-------------------------------正文开始---------------------------%%
 \begin{document}
 
@@ -37,7 +42,7 @@
 \subsection{并行计算概述}
 
 并行计算是指同时使用多个计算资源解决计算问题的过程。随着处理器主频增长放缓，多核处理器成为提升计算性能的主要途径。通过将任务分解为可以并发执行的子任务，并行计算能够显著缩短程序运行时间，提高计算效率。
-\added{新增的内容测试}
+
 \subsubsection{并行计算的分类}
 
 根据并行粒度的不同，并行计算可分为：
@@ -69,8 +74,13 @@ OpenMP（Open Multi-Processing）是一种支持共享内存并行编程的API�
     \item \texttt{\#pragma omp barrier}：设置同步点
 \end{itemize}
 
-% TODO: 添加图片 - OpenMP Fork-Join模型示意图
-% 建议: 展示主线程如何fork出多个工作线程，并行执行后join回主线程
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width =.8\textwidth]{fork-join.png}
+    \caption{OpenMP Fork-Join模型示意图}
+    \label{fig:openmp_fork_join}
+\end{figure}
 
 \subsection{性能评估指标}
 
@@ -107,50 +117,6 @@ Amdahl定律描述了程序中串行部分对并行加速比的限制：
 
 其中$f$是程序中不可并行部分的比例。当$p \to \infty$时，$S_p \to \frac{1}{f}$。这说明即使有无限多处理器，加速比也受串行部分的限制。
 
-\subsection{计算密集型 vs 访存密集型}
-
-在并行计算中，算子的性能特征可以分为两类：
-
-\subsubsection{计算密集型（Compute-Bound）}
-
-\textbf{定义：}算法的性能瓶颈在于计算单元（ALU、FPU）的吞吐量，而非内存带宽。
-
-\textbf{特征：}
-\begin{itemize}
-    \item 高计算访存比（Compute-to-Memory Ratio）：每次内存访问对应大量计算操作
-    \item 算术强度大：浮点运算次数/内存访问字节数 $\gg$ 1
-    \item 瓶颈：处理器的浮点运算能力
-    \item 并行效果：通常能获得较好的加速比
-\end{itemize}
-
-\textbf{典型例子：}
-\begin{itemize}
-    \item \textbf{卷积操作}：以输入$(1,3,150,150)$、输出$(1,32,150,150)$、stride=1、padding=2、kernel\_size=$(5,5)$为例，算术强度约为386.27 FLOP/byte
-    \item \textbf{矩阵乘法}：对于$n \times n$矩阵，算术强度约为$n/3$ FLOP/byte，$n$越大越显著
-\end{itemize}
-
-\textbf{优化策略：}增加并行度（多线程、SIMD）、提高指令级并行、循环展开
-
-\subsubsection{访存密集型（Memory-Bound）}
-
-\textbf{定义：}算法的性能瓶颈在于内存系统的带宽，而非计算能力。
-
-\textbf{特征：}
-\begin{itemize}
-    \item 低计算访存比：每次内存访问对应很少的计算操作
-    \item 算术强度小：浮点运算次数/内存访问字节数 $\ll$ 1
-    \item 瓶颈：内存带宽、缓存命中率
-    \item 并行效果：容易受内存带宽限制，加速比受限
-\end{itemize}
-
-\textbf{典型例子：}
-\begin{itemize}
-    \item \textbf{池化操作}：对于$2\times2$池化，算术强度约为0.31 FLOP/byte
-    \item \textbf{Batch Normalization}：主要是内存读写和简单运算
-    \item \textbf{激活函数}（ReLU等）：逐元素操作，计算量极小
-\end{itemize}
-
-\textbf{优化策略：}提高缓存命中率（数据重用、分块）、减少内存访问次数、预取优化、内存访问模式优化
 
 \subsection{Roofline模型}
 
@@ -161,29 +127,18 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
     \label{eq:roofline}
 \end{equation}
 
-\begin{itemize}
-    \item \textbf{计算密集型}：性能接近Peak FLOPS（屋顶的水平部分）
-    \item \textbf{访存密集型}：性能受限于Memory Bandwidth（屋顶的斜线部分）
-\end{itemize}
 
-% TODO: 添加图片 - Roofline模型示意图
-% 建议: 展示算术强度(x轴)与性能(y轴)的关系，标注计算瓶颈和访存瓶颈区域
 
-对并行化的影响如\autoref{tab:compute_vs_memory}所示。
-
-\begin{table}[!htbp]
+\comment{需要调整位置}
+\begin{figure}[!htbp]
     \centering
-    \caption{计算密集型与访存密集型的并行化特征对比}
-    \label{tab:compute_vs_memory}
-    \begin{tabular}{c|c|c|c}
-    \hline
-        类型 & 并行加速比 & 主要挑战 & 优化重点 \\
-        \hline
-        计算密集型 & 接近线性 & 负载均衡 & 增加计算并行度 \\
-        访存密集型 & 受限 & 内存带宽竞争 & 减少内存访问、提高缓存效率 \\
-        \hline
-    \end{tabular}
-\end{table}
+    \includegraphics[width =.7\textwidth]{roofline.png}
+    \caption{Roofline模型示意图}
+    \label{fig:roofline_model}
+\end{figure}
+图中的 $I_{\text{max}}$ 为拐点所对应的强度，是计算平台的计算强度上限。当 $I < I_{\text{max}}$ 时，模型的计算性能受限于带宽大小，处于带宽瓶颈区；当 $I > I_{\text{max}}$ 时，模型的计算性能瓶颈取决于平台的算力，处于计算瓶颈区。所以，模型的计算强度应尽量大于 $I_{\text{max}}$，这样才能最大程度利用计算平台的算力资源，但超过之后就无需追求无意义的提升，因为再强性能都只能达到计算平台的算力。
+
+
 
 \subsection{性能benchmark与测试环境}
 
@@ -243,7 +198,69 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 \section{神经网络算子并行化}
 
 神经网络中的算子计算通常具有高度的数据并行性，通过OpenMP等并行技术可以显著提升计算性能。本节介绍两个典型的神经网络算子：卷积（Convolution）和平均池化（Average Pooling）的并行实现。
+\subsection{计算密集型 vs 访存密集型} 
 
+
+在并行计算中，算子的性能特征可以分为两类：
+
+\subsubsection{计算密集型（Compute-Bound）}
+
+\textbf{定义：}算法的性能瓶颈在于计算单元（ALU、FPU）的吞吐量，而非内存带宽。
+
+\textbf{特征：}
+\begin{itemize}
+    \item 高计算访存比（Compute-to-Memory Ratio）：每次内存访问对应大量计算操作
+    \item 算术强度大：浮点运算次数/内存访问字节数 $\gg$ 1
+    \item 瓶颈：处理器的浮点运算能力
+    \item 并行效果：通常能获得较好的加速比
+\end{itemize}
+
+\textbf{典型例子：}
+\begin{itemize}
+    \item \textbf{卷积操作}：以输入$(1,3,150,150)$、输出$(1,32,150,150)$、stride=1、padding=2、kernel\_size=$(5,5)$为例，算术强度约为386.27 FLOP/byte
+    \item \textbf{矩阵乘法}：对于$n \times n$矩阵，算术强度约为$n/3$ FLOP/byte，$n$越大越显著
+\end{itemize}
+
+\textbf{优化策略：}增加并行度（多线程、SIMD）、提高指令级并行、循环展开
+
+\subsubsection{访存密集型（Memory-Bound）}
+
+\textbf{定义：}算法的性能瓶颈在于内存系统的带宽，而非计算能力。
+
+\textbf{特征：}
+\begin{itemize}
+    \item 低计算访存比：每次内存访问对应很少的计算操作
+    \item 算术强度小：浮点运算次数/内存访问字节数 $\ll$ 1
+    \item 瓶颈：内存带宽、缓存命中率
+    \item 并行效果：容易受内存带宽限制，加速比受限
+\end{itemize}
+
+\textbf{典型例子：}
+\begin{itemize}
+    \item \textbf{池化操作}：对于$2\times2$池化，算术强度约为0.31 FLOP/byte
+    \item \textbf{Batch Normalization}：主要是内存读写和简单运算
+    \item \textbf{激活函数}（ReLU等）：逐元素操作，计算量极小
+\end{itemize}
+
+\textbf{优化策略：}提高缓存命中率（数据重用、分块）、减少内存访问次数、预取优化、内存访问模式优化
+\comment{需要调整位置}
+\begin{table}[!htbp]
+    \centering
+    \caption{计算密集型与访存密集型的并行化特征对比}
+    \label{tab:compute_vs_memory}
+    \begin{tabular}{c|c|c|c}
+    \hline
+        类型 & 并行加速比 & 主要挑战 & 优化重点 \\
+        \hline
+        计算密集型 & 接近线性 & 负载均衡 & 增加计算并行度 \\
+        访存密集型 & 受限 & 内存带宽竞争 & 减少内存访问、提高缓存效率 \\
+        \hline
+    \end{tabular}
+\end{table}
+\begin{itemize}
+    \item \textbf{计算密集型}：性能接近Peak FLOPS（屋顶的水平部分）
+    \item \textbf{访存密集型}：性能受限于Memory Bandwidth（屋顶的斜线部分）
+\end{itemize}
 \subsection{卷积算子(Conv2d) - 计算密集型}
 
 \subsubsection{算法原理}
