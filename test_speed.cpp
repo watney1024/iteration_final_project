@@ -1,5 +1,5 @@
 // cpu_flops_test.cpp
-// 编译：g++ -O3 -march=native -fopenmp -o cpu_test cpu_flops_test.cpp
+// 编译：
 // 运行：./cpu_test [线程数]
 
 #include <omp.h>
