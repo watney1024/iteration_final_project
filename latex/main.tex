@@ -6,10 +6,40 @@
 \setaddedmarkup{\textcolor{red}{#1}} % 设置新增内容为红色
 \setdeletedmarkup{\textcolor{red}{\sout{#1}}} % 设置删除内容为红色并加删除线
 \let\comment\chcomment
+\usepackage{listings}
+\usepackage{xcolor}
+
+% 自定义样式（可选，重点配置）
+\lstset{
+    language=C++,           % 指定语言
+    basicstyle=\ttfamily\small,  % 基础字体：等宽+小号
+    keywordstyle=\color{blue}\bfseries,  % 关键字：蓝色+粗体
+    commentstyle=\color{gray}\itshape,   % 注释：灰色+斜体
+    stringstyle=\color{red},            % 字符串：红色
+    numbers=left,            % 行号显示在左侧
+    numberstyle=\tiny\color{gray},  % 行号样式：小号+灰色
+    frame=single,            % 单框包围代码
+    frameround=ffff,         % 边框圆角（可选）
+    breaklines=true,         % 自动换行（解决长行溢出）
+    showspaces=false,        % 不显示空格符号
+    showtabs=false,          % 不显示Tab符号
+    tabsize=4,               % Tab缩进为4个字符
+    escapeinside={/*@}{@*/}  % 可选：允许代码中嵌入LaTeX命令
+}
 % 加载图片处理包（支持png/jpg/pdf等格式）
 \usepackage{graphicx}
 % 可选：设置图片根目录（简化路径，推荐）
 \graphicspath{{figures/}} % 表示所有图片默认从figures文件夹读取
+\usepackage{tabularx}  % 自适应列宽，解决长文本溢出
+\usepackage{booktabs}  % 美化表格横线（替代竖线，学术更规范）
+\usepackage{siunitx}     % 数值小数位对齐（核心）
+\usepackage{ragged2e}  % 优化单元格文本对齐
+\usepackage{multirow}  % 因为用了\multirow
+% 定义自适应列：左对齐+自动换行
+\newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
+% 定义数值列：保留2位小数，居中对齐
+\newcolumntype{F}[1]{>{\centering\arraybackslash}S[table-format=#1, round-mode=places, round-precision=2]}
+
 %%-------------------------------正文开始---------------------------%%
 \begin{document}
 
@@ -145,19 +175,18 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 本项目的所有性能测试均在以下环境下进行：
 
 \begin{itemize}
-    \item \textbf{处理器}：AMD Ryzen 9 5950X（16核心32线程，基频3.4GHz，加速频率4.9GHz）
-    \item \textbf{内存}：64GB DDR4-3200
-    \item \textbf{编译器}：GCC 11.2.0 with -O3 optimization
-    \item \textbf{操作系统}：Windows 11
-    \item \textbf{并行库}：OpenMP 4.5
+    \item \textbf{处理器}：AMD Ryzen AI 9 H 365 w/ Radeon 880M（10核心20线程，基频2.0GHz）
+    \item \textbf{内存}：32GB
+    \item \textbf{编译器}：GCC 15.2.0 (MinGW)，Clang 17.0.6
+    \item \textbf{操作系统}：Windows 11 家庭中文版
+    \item \textbf{并行库}：OpenMP
 \end{itemize}
 
 性能测试方法：
 \begin{itemize}
-    \item 每个测试重复执行5次，取中位数作为最终结果
+    \item 测试算子时先50次warm up，再200次取中位数和P99
     \item 使用高精度计时器（\texttt{std::chrono::high\_resolution\_clock}）
     \item 测试前进行warm-up避免冷启动影响
-    \item 控制CPU频率锁定，避免动态调频影响结果
 \end{itemize}
 
 
@@ -194,7 +223,7 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 
 
 % 引用过的文献会自动出现在参考文献中。
-
+\clearpage
 \section{神经网络算子并行化}
 
 神经网络中的算子计算通常具有高度的数据并行性，通过OpenMP等并行技术可以显著提升计算性能。本节介绍两个典型的神经网络算子：卷积（Convolution）和平均池化（Average Pooling）的并行实现。
@@ -284,8 +313,71 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 本项目实现了三个版本的卷积算子，展示了从串行到并行、再到深度优化的演进过程。
 
 \textbf{版本1：串行实现} - 使用动态计数器记录输出位置，逻辑简单但存在数据依赖，无法直接并行。
-
+\begin{lstlisting}[language=C++]
+// 动态计数器，记录每个通道的输出位置
+int cnt[100];
+memset(cnt, 0, sizeof cnt);
+int weight_pos = 0;
+for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
+    for (int i = 0; i < output.channel; ++i) {  // 输出通道
+        for (int c = 0; c < padded_mat.channel; ++c) {  // 输入通道
+            for (int h = 0; h < padded_mat.height; h += conv_stride[0]) {
+                if (h + conv_kernel_size[0] > padded_mat.height) continue;
+                for (int w = 0; w < padded_mat.width; w += conv_stride[1]) {
+                    if (w + conv_kernel_size[1] > padded_mat.width) continue;
+                    int index = d * pc * ph * pw + c * ph * pw + h * pw + w;
+                    sum = 0;
+                    // 卷积核计算
+                    for (int k = 0; k < conv_kernel_max; ++k) {
+                        sum += (padded_mat[index + dx[k]] * weight[weight_pos + k]);
+                    }
+                    output[cnt[c]++] += sum;  // 动态累加到输出
+                }
+            }
+            weight_pos += conv_kernel_max;  // 权重位置累加
+        }
+    }
+}
+\end{lstlisting}
+\textbf{问题分析：}
+\begin{itemize}
+    \item \texttt{cnt[c]++} 存在数据竞争，无法直接并行化；
+    \item \texttt{weight\_pos} 采用循环累加方式，存在跨线程依赖；
+    \item 索引计算逻辑复杂，显著降低执行性能。
+\end{itemize}
 \textbf{版本2：并行实现} - 改为静态索引计算，在输出通道维度并行，消除依赖但并行粒度仅32。
+
+\begin{lstlisting}[language=C++]
+    #pragma omp parallel for  // 在输出通道维度并行
+    for (int i = 0; i < output.channel; ++i) {
+        for (int d = 0; d < padded_mat.dim; ++d) {
+            for (int c = 0; c < padded_mat.channel; ++c) {
+                // 静态计算权重位置，消除依赖
+                int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
+                for (int h = 0; h < input.height; h += conv_stride[0]) {
+                    for (int w = 0; w < input.width; w += conv_stride[1]) {
+                        // 静态计算输出位置
+                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width 
+                                + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
+                        int output_index = i * output.height * output.width + h * output.width + w;
+                        // 卷积核计算
+                        for (int m = 0; m < conv_kernel_max; ++m) {
+                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+\end{lstlisting}
+
+\comment{格式还要改}
+\textbf{问题分析：}
+\begin{itemize}
+    \item 索引计算仍然复杂，计算开销大；
+    \item 多次重复计算相同的索引；
+    \item 可能存在伪共享（False Sharing）问题。
+\end{itemize}
 
 \textbf{版本3：深度优化实现} - 针对版本2的瓶颈实现三方面优化：
 \begin{enumerate}
@@ -293,25 +385,65 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
     \item \textbf{二维空间并行}：使用\texttt{collapse(2)}合并$h \times w$循环，任务数从32提升至22,500，负载均衡显著改善
     \item \textbf{Bias融合}：在卷积计算时直接加bias，消除720K次额外内存访问
 \end{enumerate}
-
+\begin{lstlisting}[language=C++]
+    // 二维空间并行：任务数 = 150 × 150 = 22,500
+    // 每个线程处理一个输出位置的所有通道，避免false sharing
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int oh = 0; oh < out_h; ++oh) {
+        for (int ow = 0; ow < out_w; ++ow) {
+            int h_start = oh * stride_h;
+            int w_start = ow * stride_w;
+            
+            // 每个输出点独立计算所有输出通道
+            for (int oc = 0; oc < channel_out; ++oc) {
+                float sum = 0.0f;
+                
+                // 遍历所有输入通道
+                for (int ic = 0; ic < channel_in; ++ic) {
+                    const float* input_ptr = &padded_mat.tensor[
+                        ic * in_h * in_w + h_start * in_w + w_start];
+                    const float* weight_ptr = &weight[oc * channel_in * kernel_max + ic * kernel_max];
+                    
+                    // 5×5卷积核完全手动展开（25项）
+                    ...(展开代码略)
+                }
+                
+                // 优化：直接加bias再写入，避免后续额外遍历
+                output.tensor[oc * out_h * out_w + oh * out_w + ow] = sum + bias[oc];
+            }
+        }
+    }
+\end{lstlisting}
 如\autoref{tab:conv_version_comparison}所示，三个版本的性能对比清晰展现了优化效果。
 
-\begin{table}[!htbp]
+\begin{table}[htbp]
     \centering
-    \caption{卷积算子三版本性能对比}
-    \label{tab:conv_version_comparison}
+    \caption{普通并行 vs 优化后并行性能对比}
+    \label{tab:parallel_perf}
     \resizebox{\textwidth}{!}{
-    \begin{tabular}{l|l|l|l}
-    \hline
-        \textbf{对比维度} & \textbf{串行实现} & \textbf{通道并行} & \textbf{深度优化} \\
-        \hline
-        并行粒度 & 无 & 输出通道级(32) & \textbf{二维空间级(22,500)} \\
-        并行策略 & - & \texttt{parallel for} & \texttt{collapse(2)} \\
-        Padding & 串行逐元素 & 串行逐元素 & \textbf{并行批量} \\
-        Bias处理 & 单独循环 & 单独循环 & \textbf{融合计算} \\
-        20线程性能 & - & 3.54ms & \textbf{2.36ms(+33\%)} \\
-        并行效率 & - & 25.7\% & \textbf{39.3\%(+53\%)} \\
-        \hline
+    \begin{tabular}{c|ccc|ccc|c}
+        \toprule
+        \multirow{2}{*}{\textbf{线程数}} 
+        & \multicolumn{3}{c|}{\textbf{普通并行}} 
+        & \multicolumn{3}{c|}{\textbf{优化后并行}} 
+        & \multirow{2}{*}{\textbf{性能提升率}} \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-7}
+        & \textbf{中位数时间(ms)} 
+        & \textbf{加速比} 
+        & \textbf{效率(\%)} 
+        & \textbf{中位数时间(ms)} 
+        & \textbf{加速比} 
+        & \textbf{效率(\%)} 
+        & \textbf{(vs 普通并行)} \\
+        \midrule
+        1  & 18.20 & 1.00 & 100.00 & 18.58 & 1.00 & 100.00 & -2.1\% \\
+        2  & 9.88  & 1.84 & 91.90  & 9.32  & 1.99 & 99.50  & +5.7\% \\
+        4  & 5.52  & 3.30 & 82.54  & 4.93  & 3.77 & 94.25  & +10.7\% \\
+        8  & 4.01  & 4.54 & 56.72  & 3.72  & 5.00 & 62.50  & +7.2\% \\
+        10 & 4.05  & 4.49 & 44.91  & 2.82  & 6.59 & 65.90  & +30.4\% \\
+        16 & 3.63  & 5.01 & 31.32  & 2.65  & 7.00 & 43.75  & +27.0\% \\
+        20 & 3.54  & 5.14 & 25.68  & 2.36  & 7.86 & 39.30  & \textbf{+33.3\%} \\
+        \bottomrule
     \end{tabular}
     }
 \end{table}
@@ -340,7 +472,7 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 
 \textbf{2. False Sharing} - 解决方案：按输出通道并行或二维空间并行，每线程写入独立位置。
 
-\textbf{3. 内存带宽限制} - 算术强度约386.27 FLOP/byte，虽属计算密集型，但多线程时仍可能受带宽限制。
+\textbf{3. 内存带宽限制} - 算术强度约386.27 FLOP/byte，虽属计算密集型，但多线程时仍可能受带宽限制。这是由于本次测试用的张量维数较低，计算量不够大，对于现代CPU来说，瓶颈仍为内存访问。
 
 \subsection{平均池化算子(AvgPool2d) - 访存密集型}
 
@@ -354,23 +486,194 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 \end{equation}
 
 \subsubsection{并行实现与性能}
+\textbf{版本1：普通并行} - 仅添加\texttt{\#pragma omp parallel for}，在通道维度并行。
+\comment{括号可以放到同一行}
+\begin{lstlisting}[language=C++]
+    for (int d = 0; d < input.dim; ++d)
+    {
+        // #pragma omp parallel for (普通并行只要在这加入并行即可)
+        for (int c = 0; c < input.channel; ++c)
+        {
+            for (int oh = 0; oh < out_h; ++oh)
+            {
+                for (int ow = 0; ow < out_w; ++ow)
+                {
+                    float sum = 0.0;
+                    int count = 0;
+                    for (int kh = 0; kh < avgp_kernel_size[0]; ++kh)
+                    {
+                        for (int kw = 0; kw < avgp_kernel_size[1]; ++kw)
+                        {
+                            int h = oh * avgp_stride[1] + kh;
+                            int w = ow * avgp_stride[0] + kw;
+                            if (h < input_h && w < input_w)
+                            {
+                                int index = (d * input.channel * input_h * input_w) + (c * input_h * input_w) + (h * input_w) + w;
+                                sum += input[index];
+                                count++;
+                            }
+                        }
+                    }
+                    output[(d * output.channel * out_h * out_w) + (c * out_h * out_w) + (oh * out_w) + ow] = sum / count;
+                }
+            }
+        }
+    }
+\end{lstlisting}
+
+\textbf{版本2：访存优化} - 通过预计算通道指针、优化边界检查和针对2x2池化的特殊优化，提升内存访问效率。
+
+\begin{lstlisting}[language=C++]
+    for (int d = 0; d < input.dim; ++d)
+    {
+        // Parallelize over channels - optimal granularity
+        #pragma omp parallel for
+        for (int c = 0; c < input.channel; ++c)
+        {
+            // Precompute channel offsets using pointers
+            const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
+            float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
+            
+            if (use_2x2_optimized)
+            {
+                // Specialized optimization for 2x2 kernel with stride 2
+                // Unroll kernel loops for better performance
+                for (int oh = 0; oh < out_h; ++oh)
+                {
+                    for (int ow = 0; ow < out_w; ++ow)
+                    {
+                        // Input coordinates
+                        int h_start = oh * 2;
+                        int w_start = ow * 2;
+                        
+                        // Check if all 4 pixels are within bounds
+                        if (h_start + 1 < input_h && w_start + 1 < input_w)
+                        {
+                            // Direct access to 4 pixels in 2x2 kernel
+                            int idx_00 = h_start * input_w + w_start;
+                            int idx_01 = idx_00 + 1;
+                            int idx_10 = idx_00 + input_w;
+                            int idx_11 = idx_10 + 1;
+                            
+                            // Compute average of 4 pixels
+                            float sum = input_channel_ptr[idx_00] + 
+                                       input_channel_ptr[idx_01] + 
+                                       input_channel_ptr[idx_10] + 
+                                       input_channel_ptr[idx_11];
+                            
+                            output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // Multiply instead of divide
+                        }
+                        else
+                        {
+                            // Boundary case - use general approach
+                            float sum = 0.0f;
+                            int count = 0;
+                            for (int kh = 0; kh < 2; ++kh)
+                            {
+                                for (int kw = 0; kw < 2; ++kw)
+                                {
+                                    int h = h_start + kh;
+                                    int w = w_start + kw;
+                                    if (h < input_h && w < input_w)
+                                    {
+                                        sum += input_channel_ptr[h * input_w + w];
+                                        count++;
+                                    }
+                                }
+                            }
+                            output_channel_ptr[oh * out_w + ow] = sum / count;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // General case for arbitrary kernel sizes
+                for (int oh = 0; oh < out_h; ++oh)
+                {
+                    for (int ow = 0; ow < out_w; ++ow)
+                    {
+                        float sum = 0.0f;
+                        int count = 0;
+                        
+                        int h_start = oh * stride_h;
+                        int w_start = ow * stride_w;
+                        
+                        for (int kh = 0; kh < kernel_h; ++kh)
+                        {
+                            for (int kw = 0; kw < kernel_w; ++kw)
+                            {
+                                int h = h_start + kh;
+                                int w = w_start + kw;
+                                if (h < input_h && w < input_w)
+                                {
+                                    sum += input_channel_ptr[h * input_w + w];
+                                    count++;
+                                }
+                            }
+                        }
+                        output_channel_ptr[oh * out_w + ow] = sum / count;
+                    }
+                }
+            }
+        }
+    }
+\end{lstlisting}
 
 池化操作属典型访存密集型算子，在通道维度并行，使用连续内存访问模式提高缓存命中率。
 
+
+\begin{table}[htbp]  % 浮动体位置参数，适配前文讲解的htbp
+    \centering
+    \caption{两种池化实现对比}  % 表格标题（按需修改）
+    \label{tab:pool_optim}     % 交叉引用标签（按需修改）
+    \resizebox{\linewidth}{!}{% 自适应页面宽度
+        \begin{tabularx}{\linewidth}{cYYc}
+            \toprule  % 顶部粗线
+            \textbf{优化维度} & \textbf{普通版本} & \textbf{访存优化版本} & \textbf{性能影响} \\
+            \midrule  % 中间细线
+            \textbf{指针运算} & 每次循环重复计算全局索引 \texttt{(d*C*H*W + c*H*W + h*W + w)} & \textbf{预计算通道指针} \texttt{input\_channel\_ptr} 和 \texttt{output\_channel\_ptr} & \textbf{高} 消除大量乘法运算 \\
+            \midrule
+            \textbf{边界检查} & 内层循环逐像素\texttt{if(h < input\_h \&\& w < input\_w)} & \textbf{外提边界判断}，内层循环无分支 & \textbf{高} 减少分支预测失败 \\
+            \midrule
+            \textbf{特殊Case特化} & 通用循环处理所有kernel size & \textbf{2×2 kernel stride=2 手动展开} & \textbf{极高} 向量化+指令级并行 \\
+            \midrule
+            \textbf{除法优化} & \texttt{sum / count} 浮点除法 & 2×2 case用 \texttt{* 0.25f} 乘法代替 & \textbf{中} 除法耗时是乘法的5-10倍 \\
+            \midrule
+            \textbf{访存连续性} & 跨通道访问导致跳跃 & \textbf{通道内连续访存} + 局部性优化 & \textbf{高} 提升Cache命中率 \\
+            \bottomrule  % 底部粗线
+        \end{tabularx}
+    }
+\end{table}
 \begin{table}[!htbp]
     \centering
     \caption{平均池化算子性能测试结果}
     \label{tab:avgpool_performance}
-    \begin{tabular}{c|c|c|c}
-    \hline
-        线程数 & 执行时间(ms) & 加速比 & 效率(\%) \\
-        \hline
-        1 & 2.45 & 1.00 & 100.00 \\
-        4 & 0.89 & 2.75 & 68.75 \\
-        8 & 0.67 & 3.66 & 45.75 \\
-        20 & 0.55 & 4.45 & 22.25 \\
-        \hline
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{l|c|c|c|c|c}
+        \toprule
+        \textbf{测试类型} & \textbf{线程数} & \textbf{中位数(ms)} & \textbf{P99(ms)} & \textbf{加速比} & \textbf{并行效率} \\
+        \midrule
+        \multirow{7}{*}{\textbf{input channel并行}} 
+        & 1  & 31.12 & 34.25 & 1.00× & 100.00\% \\
+        & 2  & 18.26 & 21.47 & 1.70× & 85.00\% \\
+        & 4  & 10.14 & 13.59 & 3.07× & 76.75\% \\
+        & 8  & 6.31  & 7.48  & 4.93× & 61.63\% \\
+        & 10 & 5.99  & 7.28  & 5.20× & 52.00\% \\
+        & 16 & 5.22  & 8.48  & 5.96× & 37.25\% \\
+        & 20 & 4.97  & 6.81  & \textbf{6.26×} & 31.30\% \\
+        \midrule
+        \multirow{7}{*}{\textbf{访存优化版avgpool}} 
+        & 1  & 12.70 & 14.29 & 1.00× & 100.00\% \\
+        & 2  & 6.91  & 7.35  & 1.84× & 92.00\% \\
+        & 4  & 4.20  & 5.05  & 3.02× & 75.50\% \\
+        & 8  & 2.82  & 3.49  & 4.50× & 56.25\% \\
+        & 10 & 2.57  & 3.32  & 4.94× & 49.40\% \\
+        & 16 & 2.50  & 3.12  & 5.08× & 31.75\% \\
+        & 20 & 2.66  & 3.11  & \textbf{4.77×} & 23.85\% \\
+        \bottomrule
     \end{tabular}
+    }
 \end{table}
 
 \textbf{关键发现：}池化加速比（4.45×@20线程）明显低于卷积（7.86×），并行效率下降更快，原因是算术强度低（0.31 FLOP/byte），受内存带宽限制。
@@ -382,6 +685,8 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
     \item \textbf{访存密集型}（池化）：受内存带宽限制，需缓存优化、数据预取  
     \item \textbf{共同原则}：避免过细并行粒度、静态索引消除依赖、合理选择并行维度
 \end{itemize}
+
+\clearpage
 
 \section{红黑排序Gauss-Seidel迭代法}
 
@@ -423,8 +728,12 @@ $$
     \item 因此：\textbf{同色点之间无依赖}，可以完全并行更新
 \end{itemize}
 
-% TODO: 添加图片 - 红黑棋盘染色示意图（2D和3D）
-% 建议: 展示2D棋盘格的红黑点分布，以及3D网格的切片视图
+\begin{figure}
+    \centering
+    \includegraphics[width=0.4\textwidth]{figures/RB-gauss.png}
+    \caption{二维红黑网格示意图}
+    \label{fig:red_black_grid}
+\end{figure}
 
 迭代步骤：
 \begin{enumerate}
@@ -477,9 +786,9 @@ $$
         线程数 & 执行时间(ms) & vs单线程 & 同步开销占比 \\
         \hline
         1 & 20.74 & 1.00× & 0\% \\
-        2 & 288.37 & 0.07× ⚠️ & $\sim$92\% \\
-        4 & 653.93 & 0.03× ❌ & $\sim$97\% \\
-        8 & 1209.27 & 0.02× ❌ & $\sim$98\% \\
+        2 & 288.37 & 0.07×  & $\sim$92\% \\
+        4 & 653.93 & 0.03×  & $\sim$97\% \\
+        8 & 1209.27 & 0.02×  & $\sim$98\% \\
         \hline
     \end{tabular}
 \end{table}
@@ -556,9 +865,9 @@ $$
     \item 小规模灾难：64×64和128×128的2D问题，多线程反而慢5-50倍
 \end{itemize}
 
-\subsection{三种优化方法}
+\subsection{两种优化方法}
 
-本节介绍三种不同的Gauss-Seidel并行实现方法，从基础的红黑排序并行到高级的分块+内存对齐优化。
+本节介绍两种不同的Gauss-Seidel并行实现方法，从基础的红黑排序并行到高级的分块优化。
 
 \subsubsection{Original方法：基础红黑排序并行}
 
@@ -570,6 +879,62 @@ $$
     \item \textbf{自适应块大小}：小规模用小块（16-32），大规模用大块（64-128），平衡并行度和缓存
     \item \textbf{静态调度}：\texttt{schedule(static)}确保负载均匀分配
 \end{itemize}
+
+\begin{lstlisting}[language=C++]
+    // gauss_seidel_2d.cpp 核心代码
+void solve_parallel_redblack(/* ... */) {
+    omp_set_num_threads(num_threads);
+    
+    // 自适应块大小（根据规模和线程数）
+    int tile_size;
+    if (N <= 64) {
+        tile_size = (num_threads >= 4) ? 16 : 32;
+    } else if (N <= 128) {
+        tile_size = (num_threads >= 8) ? 16 : 32;
+    } else if (N <= 256) {
+        tile_size = 32;
+    } else if (N <= 512) {
+        tile_size = 64;
+    } else {
+        tile_size = 128;
+    }
+    
+    for (int iter = 0; iter < max_iter; ++iter) {
+        // === 红点更新阶段 ===
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (int bi = 1; bi <= N; bi += tile_size) {
+            for (int bj = 1; bj <= N; bj += tile_size) {
+                // 块内更新红点
+                for (int i = bi; i < i_end; ++i) {
+                    // 关键优化：直接步长为2，无条件判断
+                    int j_start = ((i + bi) % 2 == 0) ? bi : bi + 1;
+                    for (int j = j_start; j < j_end; j += 2) {
+                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
+                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
+                    }
+                }
+            }
+        }
+        #pragma omp barrier  // 确保所有红点更新完成
+        // === 黑点更新阶段 ===
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (int bi = 1; bi <= N; bi += tile_size) {
+            for (int bj = 1; bj <= N; bj += tile_size) {
+                // 块内更新黑点（步长同样为2）
+                for (int i = bi; i < i_end; ++i) {
+                    int j_start = ((i + bi) % 2 == 1) ? bi : bi + 1;
+                    for (int j = j_start; j < j_end; j += 2) {
+                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
+                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
+                    }
+                }
+            }
+        }
+        
+        #pragma omp barrier  // 确保所有黑点更新完成
+    }
+}
+\end{lstlisting}
 
 \textbf{优点：}实现简单，对大规模问题（512²以上）效果良好
 
@@ -587,65 +952,125 @@ $$
 \end{itemize}
 
 \textbf{性能提升：}在中大规模问题中稳定领先Original方法10-20\%
+\begin{lstlisting}[language=C++]
+    // gauss_seidel_2d_tiled.cpp 核心代码
+void solve_4level_tiling(/* ... */) {
+    // 两级tiling参数
+    const int L3_TILE = (N >= 512) ? 128 : 64;  // 外层：L3 Cache块
+    const int L1_TILE = 16;                      // 内层：L1 Cache块
+    
+    for (int iter = 0; iter < max_iter; ++iter) {
+        // === 红点更新：两级分块 ===
+        #pragma omp for schedule(static) nowait
+        for (int bi = 1; bi <= N; bi += L3_TILE) {
+            int bi_end = std::min(bi + L3_TILE, N + 1);
+            
+            // L1 Cache级别的细粒度分块
+            for (int ti = bi; ti < bi_end; ti += L1_TILE) {
+                int ti_end = std::min(ti + L1_TILE, bi_end);
+                
+                // 预取优化：提前加载下一个L1块
+                #ifdef __x86_64__
+                if (ti + L1_TILE < bi_end) {
+                    _mm_prefetch((const char*)&U(ti + L1_TILE, 1), _MM_HINT_T0);
+                }
+                #endif
+                
+                // 内核循环：访问L1块内的红点
+                for (int i = ti; i < ti_end; ++i) {
+                    int j_start = (i % 2 == 1) ? 1 : 2;  // 红点起始位置
+                    
+                    for (int j = j_start; j <= N; j += 2) {
+                        // 显式寄存器缓存邻点值
+                        double reg[4];
+                        reg[0] = U(i-1, j);
+                        reg[1] = U(i+1, j);
+                        reg[2] = U(i, j-1);
+                        reg[3] = U(i, j+1);
+                        
+                        U(i, j) = 0.25 * (reg[0] + reg[1] + reg[2] + reg[3] + 
+                                         h2 * F(i-1, j-1));
+                    }
+                }
+            }
+        }
+        
+        #pragma omp barrier
+        
+        // === 黑点更新：相同的两级分块策略 ===
+        // ... (结构相同)
+    }
+}
+\end{lstlisting}
 
-\subsubsection{Tiled+Aligned方法：内存对齐优化}
-
-\textbf{核心思想：}64字节对齐 + AVX-512向量化准备
-
-\textbf{优化技术：}
-\begin{itemize}
-    \item \textbf{64字节对齐}：使用\texttt{aligned\_alloc()}分配内存，确保每行起始地址64字节对齐
-    \item \textbf{消除跨Cache Line访问}：对齐后减少缓存未命中
-    \item \textbf{编译器友好}：\texttt{\_\_assume\_aligned}提示编译器生成更优代码
-\end{itemize}
-
-\textbf{性能特征：}极不稳定，大规模可能更好，但中等规模（如128³）可能灾难性负优化
 
 \subsection{性能测试结果}
 
-详细的性能测试数据见附录。主要发现如\autoref{tab:gs_methods_summary}所示。
+详细的性能测试数据见附录。我们只对比具有实际并行收益（加速比>1）的规模，主要发现如\autoref{tab:gs_methods_summary}所示。
 
 \begin{table}[!htbp]
     \centering
-    \caption{三种方法性能对比总结}
+    \caption{Original vs Tiled性能对比（最优配置下的绝对时间）}
     \label{tab:gs_methods_summary}
     \begin{tabular}{c|c|c|c}
     \hline
-        问题类型 & 第1名 & 第2名 & 第3名 \\
+        问题类型 & 优胜方法 & 最优时间 & 性能提升 \\
         \hline
-        2D, 512×512 & Original & Tiled & Aligned \\
-        2D, 1024×1024 & \textbf{Tiled} & Original & Aligned \\
-        2D, 2048×2048 & Original & \textbf{Aligned} & Tiled \\
-        3D, 128³ & \textbf{Tiled} & Original & Aligned❌ \\
-        3D, 512³ & \textbf{Tiled} & Original & Aligned \\
+        2D, 512×512 & \textbf{Tiled} & 86.86ms (4线程) & 快27\% \\
+        2D, 1024×1024 & \textbf{Tiled} & 272.70ms (8线程) & \textbf{快43\%} \\
+        2D, 2048×2048 & \textbf{Tiled} & 2810.09ms (8线程) & 快15\% \\
+        \hline
+        3D, 64³ & \textbf{Tiled} & 15.88ms (4线程) & 快14\% \\
+        3D, 128³ & \textbf{Tiled} & 228.51ms (8线程) & 快26\% \\
+        3D, 256³ & Original & 2374.13ms (8线程) & 快7\% \\
+        3D, 512³ & \textbf{Tiled} & 16941.90ms (16线程) & 快3\% \\
         \hline
     \end{tabular}
 \end{table}
 
-\textbf{综合结论：}
+\textbf{关键发现：}
 \begin{itemize}
-    \item \textbf{Tiled是最均衡的选择}：中大规模问题稳定领先10-20\%
-    \item \textbf{Original最稳定}：虽然不是最快，但没有灾难性失败案例
-    \item \textbf{Aligned很不稳定}：大规模可能更好，但中等规模可能灾难
+    \item \textbf{Tiled全面领先}：在7个测试规模中，Tiled方法赢得6场，仅在3D 256³输给Original
+    \item \textbf{中等规模优势显著}：1024×1024（快43\%）和128³（快26\%）规模下，分块优化效果最佳
+    \item \textbf{超大规模仍有效}：2048×2048和512³规模下，Tiled依然保持15\%和3\%的领先
+    \item \textbf{唯一例外}：3D 256³规模下Original快7\%，可能因缓存容量与分块大小不匹配
 \end{itemize}
 
 \subsection{实用性建议}
 
-\textbf{决策树：选择合适的方法和线程数}
+\textbf{方法选择决策树：}
 
 \begin{itemize}
-    \item 问题规模 < 256：使用\textbf{串行版本}（并行有害）
-    \item 2D, 512 ≤ N < 1024：\textbf{Original，4-8线程}
-    \item 2D, N ≥ 1024：\textbf{Tiled，8-16线程}
-    \item 3D, N < 128：\textbf{2-4线程}
-    \item 3D, N ≥ 128：\textbf{Tiled，8-16线程}
+    \item \textbf{2D问题：}
+    \begin{itemize}
+        \item $N < 512$：使用\textbf{串行版本}（并行完全无收益）
+        \item $N \geq 512$：推荐\textbf{Tiled方法}（全面领先15-43\%）
+        \begin{itemize}
+            \item 512×512: 4线程（86.86ms）
+            \item 1024×1024: 8线程（272.70ms，优势最大）
+            \item 2048×2048: 8线程（2810.09ms）
+        \end{itemize}
+    \end{itemize}
+    
+    \item \textbf{3D问题：}
+    \begin{itemize}
+        \item $N < 64$：使用\textbf{串行版本}
+        \item $N = 256$：推荐\textbf{Original，8线程}（唯一例外，快7\%）
+        \item 其他规模：推荐\textbf{Tiled方法}
+        \begin{itemize}
+            \item 64³: 4线程（15.88ms，快14\%）
+            \item 128³: 8线程（228.51ms，快26\%）
+            \item 512³: 16线程（16941.90ms）
+        \end{itemize}
+    \end{itemize}
 \end{itemize}
 
-\textbf{特别警告：}
+\textbf{线程配置建议：}
 \begin{itemize}
-    \item ❌ 不要在小规模问题(<256)使用超过4线程
-    \item ❌ 不要在128³问题使用Tiled+Aligned（实测灾难性负优化）
-    \item ⚠️ 20线程通常不比16线程好（可能更差）
+    \item ✓ 中等规模（2D: 512-1024，3D: 64-128）：4-8线程最优
+    \item ✓ 超大规模（2D: 2048+，3D: 512+）：8-16线程
+    \item ❌ 避免超过16线程：实测20线程性能反而下降5-15\%
+    \item ❌ 小规模禁用并行：同步开销占比>90\%，严重负优化
 \end{itemize}
 
 \subsection{小结}
@@ -654,10 +1079,10 @@ $$
 
 \begin{itemize}
     \item \textbf{打破数据依赖}：红黑排序成功打破了串行依赖，使并行化成为可能
-    \item \textbf{同步开销主导}：小规模问题中，Barrier同步时间远大于计算时间（占比>90\%）
-    \item \textbf{规模阈值效应}：存在明确的规模阈值，2D需$N \geq 512$，3D需$N \geq 128$
-    \item \textbf{缓存优化重要}：Tiled分块在中大规模问题中稳定领先10-20\%
-    \item \textbf{Amdahl定律限制}：即使完美并行化，串行部分（同步）仍严重限制加速比
+    \item \textbf{同步开销主导}：小规模问题中，Barrier同步时间远大于计算时间（占比>90\%），导致并行完全无效
+    \item \textbf{规模阈值效应}：存在明确的并行收益阈值——2D需$N \geq 512$，3D需$N \geq 64$
+    \item \textbf{分块优化显著有效}：Tiled在7个测试规模中赢得6场，中等规模提升15-43\%
+    \item \textbf{最佳配置实测}：1024×1024规模下，Tiled+8线程达到272.70ms（比Original快43\%，相对单线程3.63×加速）
 \end{itemize}
 
 \section{三对角方程组并行求解}
