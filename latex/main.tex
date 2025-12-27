@@ -2,7 +2,9 @@
 \documentclass[12pt,hyperref,a4paper,UTF8]{ctexart}
 \usepackage{SJTUReport}
 \usepackage{booktabs}  % 在导言区添加
-
+\usepackage[draft]{changes} % final 可以替换为 draft 查看标注效果
+\setaddedmarkup{\textcolor{red}{#1}} % 设置新增内容为红色
+\setdeletedmarkup{\textcolor{red}{\sout{#1}}} % 设置删除内容为红色并加删除线
 %%-------------------------------正文开始---------------------------%%
 \begin{document}
 
@@ -35,7 +37,7 @@
 \subsection{并行计算概述}
 
 并行计算是指同时使用多个计算资源解决计算问题的过程。随着处理器主频增长放缓，多核处理器成为提升计算性能的主要途径。通过将任务分解为可以并发执行的子任务，并行计算能够显著缩短程序运行时间，提高计算效率。
-
+\added{新增的内容测试}
 \subsubsection{并行计算的分类}
 
 根据并行粒度的不同，并行计算可分为：
@@ -203,73 +205,7 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
     \item 控制CPU频率锁定，避免动态调频影响结果
 \end{itemize}
 
-%% 以下是原始的模板说明，保留用于参考
-%\section{一些插入功能}
-\subsection{插入公式}
-行内公式$v-\varepsilon+\phi=2$。
 
-插入行间公式如\autoref{Euler}：
-\begin{equation}
-    v-\varepsilon+\phi=2
-    \label{Euler}
-\end{equation}
-
-\subsection{插入图片}
-SJTU校徽如\autoref{SJTU}所示，注意这里使用了\verb|~\autoref{}|命令，也就是会自动生成“图”“式”等前缀，无需手动输入。
-
-此外，模版同时提供了校徽，如\autoref{SJTU_notitle}所示，请根据实际需求使用。
-
-\begin{figure}[!htbp]
-    \centering
-    \includegraphics[width =.5\textwidth]{figures/sjtu_logo.pdf}
-    \caption{上海交通大学}
-    \label{SJTU}
-\end{figure}
-
-\begin{figure}[!htbp]
-    \centering
-    \includegraphics[width =.4\textwidth]{figures/sjtu_logo_notitle.pdf}
-    \caption{校徽}
-    \label{SJTU_notitle}
-\end{figure}
-
-
-
-插入上面图片的代码：
-
-\begin{verbatim}
-    \begin{figure}[!htbp]
-        \centering
-        \includegraphics[width =.4\textwidth]{figures/sjtu_logo.pdf}
-        \caption{上海交通大学}
-        \label{SJTU}
-    \end{figure}
-\end{verbatim}
-
-\subsection{插入文本框}
-本模板定义了一个圆角灰底的文本框，使用简化命令\verb|\tbox{}|即可，如果你不喜欢，可以前往 \texttt{SJTUReport.sty}对其进行修改。
-
-\tbox{
-    这是一个圆角灰底的文本框
-}
-
-\subsection{插入表格}
-本模板文件如\autoref{doc}所示。
-\begin{table}[!htbp]
-    \centering
-    \begin{tabular}{l  | l}
-    \hline
-        文件名 & 说明 \\
-        \hline
-        \texttt{main.tex}  & 主文件 \\
-        \texttt{reference.bib} & 参考文献 \\
-        \texttt{SJTUReport.sty}  & 文档格式控制\\
-        \texttt{figures}  & 图片文件夹 \\
-        \hline
-    \end{tabular}
-    \caption{本模板文件组成}
-    \label{doc}
-\end{table}
 
 %\section{定理环境}
 %\begin{Theorem}
@@ -293,16 +229,16 @@ SJTU校徽如\autoref{SJTU}所示，注意这里使用了\verb|~\autoref{}|命�
 %\begin{proof}
 %\end{proof}
 
-\subsection{插入参考文献}
-直接使用\verb|\cite{}|即可。
+% \subsection{插入参考文献}
+% 直接使用\verb|\cite{}|即可。
 
-例如：
-
-
-   \textit{ 此处引用了文献\cite{OFDMAbackscatter}。此处引用了文献\cite{DigiScatter}}
+% 例如：
 
 
-引用过的文献会自动出现在参考文献中。
+%    \textit{ 此处引用了文献\cite{OFDMAbackscatter}。此处引用了文献\cite{DigiScatter}}
+
+
+% 引用过的文献会自动出现在参考文献中。
 
 \section{神经网络算子并行化}
 
