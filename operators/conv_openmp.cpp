@@ -205,10 +205,10 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
         dx[24] = 4 * padded_mat.width + 4;
     }
     //#pragma omp parallel for
-    for (int i = 0; i < output.channel; ++i)
+    for (int d = 0; d < padded_mat.dim; ++d)
     {
-        //#pragma omp parallel for
-        for (int d = 0; d < padded_mat.dim; ++d)
+        #pragma omp parallel for
+        for (int i = 0; i < output.channel; ++i)
         {
             //#pragma omp parallel for
             for (int c = 0; c < padded_mat.channel; ++c)
@@ -217,7 +217,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
                 //#pragma omp parallel for
                 for (int h = 0; h < input.height; h += conv_stride[0])
                 {
-                    #pragma omp parallel for
+                    //#pragma omp parallel for
                     for (int w = 0; w < input.width; w += conv_stride[1])
                     {
                         int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
