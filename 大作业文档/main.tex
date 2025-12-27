@@ -1,0 +1,564 @@
+%!TeX program = xelatex
+\documentclass[12pt,hyperref,a4paper,UTF8]{ctexart}
+\usepackage{SJTUReport}
+
+%%-------------------------------正文开始---------------------------%%
+\begin{document}
+
+%%-----------------------封面--------------------%%
+\cover
+
+%%------------------摘要-------------%%
+%\begin{abstract}
+%
+%在此填写摘要内容
+%
+%\end{abstract}
+
+\thispagestyle{empty} % 首页不显示页码
+
+%%--------------------------目录页------------------------%%
+\newpage
+\tableofcontents
+
+%%------------------------正文页从这里开始-------------------%
+\newpage
+
+\section{神经网络算子并行化}
+
+神经网络中的算子计算通常具有高度的数据并行性，通过OpenMP等并行技术可以显著提升计算性能。本节介绍两个典型的神经网络算子：卷积（Convolution）和平均池化（Average Pooling）的并行实现。
+
+\subsection{计算密集型 vs 访存密集型}
+
+在并行计算中，算子的性能特征可以分为两类：
+
+\subsubsection{计算密集型（Compute-Bound）}
+
+\textbf{定义：} 算法的性能瓶颈在于计算单元（ALU、FPU）的吞吐量，而非内存带宽。
+
+\textbf{特征：}
+\begin{itemize}
+    \item \textbf{高计算访存比（Compute-to-Memory Ratio）}：每次内存访问对应大量计算操作
+    \item \textbf{算术强度大}：浮点运算次数 / 内存访问字节数 >> 1
+    \item \textbf{瓶颈}：处理器的浮点运算能力
+    \item \textbf{并行效果}：通常能获得较好的加速比
+\end{itemize}
+
+\textbf{典型例子：}
+\begin{itemize}
+    \item \textbf{卷积操作}：每个输出元素需要 $C_{in} \times K_h \times K_w$ 次乘加运算
+    \begin{itemize}
+        \item 对于5×5卷积，32输入通道：每个输出需要 $32 \times 5 \times 5 = 800$ 次乘加
+        \item 算术强度：$800 \text{ FLOP} / (800 \times 4 \text{ bytes}) \approx 0.25$ FLOP/byte
+    \end{itemize}
+    \item \textbf{矩阵乘法}：$O(n^3)$ 计算量，$O(n^2)$ 内存访问
+\end{itemize}
+
+\textbf{优化策略：}
+\begin{itemize}
+    \item 增加并行度（多线程、SIMD）
+    \item 提高指令级并行（ILP）
+    \item 循环展开、流水线优化
+\end{itemize}
+
+\subsubsection{访存密集型（Memory-Bound）}
+
+\textbf{定义：} 算法的性能瓶颈在于内存系统的带宽，而非计算能力。
+
+\textbf{特征：}
+\begin{itemize}
+    \item \textbf{低计算访存比}：每次内存访问对应很少的计算操作
+    \item \textbf{算术强度小}：浮点运算次数 / 内存访问字节数 << 1
+    \item \textbf{瓶颈}：内存带宽、缓存命中率
+    \item \textbf{并行效果}：容易受内存带宽限制，加速比受限
+\end{itemize}
+
+\textbf{典型例子：}
+\begin{itemize}
+    \item \textbf{池化操作}：每个输出元素只需要 $K_h \times K_w$ 次加法和1次除法
+    \begin{itemize}
+        \item 对于2×2池化：4次加法 + 1次除法 = 5次操作
+        \item 算术强度：$5 \text{ FLOP} / (4 \times 4 \text{ bytes}) \approx 0.31$ FLOP/byte
+    \end{itemize}
+    \item \textbf{Batch Normalization}：主要是内存读写和简单运算
+    \item \textbf{激活函数}（ReLU等）：逐元素操作，计算量极小
+\end{itemize}
+
+\textbf{优化策略：}
+\begin{itemize}
+    \item 提高缓存命中率（数据重用、分块）
+    \item 减少内存访问次数
+    \item 预取（Prefetch）优化
+    \item 内存访问模式优化（连续访问、对齐）
+\end{itemize}
+
+\subsubsection{Roofline模型}
+
+性能上限由两个因素决定：
+
+$$
+\text{Performance} = \min(\text{Peak FLOPS}, \text{Arithmetic Intensity} \times \text{Memory Bandwidth})
+$$
+
+\begin{itemize}
+    \item \textbf{计算密集型}：接近Peak FLOPS（屋顶的水平部分）
+    \item \textbf{访存密集型}：受限于Memory Bandwidth（屋顶的斜线部分）
+\end{itemize}
+
+\textbf{对并行化的影响：}
+
+\begin{table}[!htbp]
+    \centering
+    \begin{tabular}{|l|l|l|l|}
+    \hline
+        类型 & 并行加速比 & 主要挑战 & 优化重点 \\
+        \hline
+        计算密集型 & 接近线性 & 负载均衡 & 增加计算并行度 \\
+        访存密集型 & 受限 & 内存带宽竞争 & 减少内存访问、提高缓存效率 \\
+        \hline
+    \end{tabular}
+    \caption{计算密集型与访存密集型对比}
+\end{table}
+
+\subsection{卷积算子(Conv2d) - 计算密集型}
+
+\subsubsection{算法原理}
+
+二维卷积是深度学习中最基础且最重要的操作之一。给定输入特征图 $X \in \mathbb{R}^{C_{in} \times H_{in} \times W_{in}}$ 和卷积核 $W \in \mathbb{R}^{C_{out} \times C_{in} \times K_h \times K_w}$，卷积操作计算输出特征图 $Y \in \mathbb{R}^{C_{out} \times H_{out} \times W_{out}}$：
+
+$$
+Y[o, h, w] = b[o] + \sum_{c=0}^{C_{in}-1} \sum_{i=0}^{K_h-1} \sum_{j=0}^{K_w-1} X[c, h \cdot s_h + i, w \cdot s_w + j] \cdot W[o, c, i, j]
+$$
+
+其中：
+\begin{itemize}
+    \item $C_{in}$, $C_{out}$: 输入和输出通道数
+    \item $K_h$, $K_w$: 卷积核高度和宽度
+    \item $s_h$, $s_w$: 步长(stride)
+    \item $b[o]$: 偏置项
+\end{itemize}
+
+输出特征图的尺寸计算公式：
+
+$$
+H_{out} = \lfloor \frac{H_{in} + 2 \cdot padding - K_h}{s_h} \rfloor + 1
+$$
+
+$$
+W_{out} = \lfloor \frac{W_{in} + 2 \cdot padding - K_w}{s_w} \rfloor + 1
+$$
+
+\subsubsection{性能测试结果}
+
+测试配置：
+\begin{itemize}
+    \item 输入尺寸：(1, 3, 150, 150)
+    \item 输出尺寸：(1, 32, 150, 150)
+    \item 卷积核：5×5, stride=1, padding=2
+\end{itemize}
+
+\subsection{平均池化算子(AvgPool2d) - 访存密集型}
+
+\subsubsection{算法原理}
+
+平均池化(Average Pooling)是一种降采样操作，通过计算局部区域的平均值来减小特征图尺寸。给定输入特征图 $X \in \mathbb{R}^{C \times H_{in} \times W_{in}}$ 和池化窗口大小 $(K_h, K_w)$，平均池化计算输出 $Y \in \mathbb{R}^{C \times H_{out} \times W_{out}}$：
+
+$$
+Y[c, h, w] = \frac{1}{K_h \times K_w} \sum_{i=0}^{K_h-1} \sum_{j=0}^{K_w-1} X[c, h \cdot s_h + i, w \cdot s_w + j]
+$$
+
+其中：
+\begin{itemize}
+    \item $c$: 通道索引（池化操作独立作用于每个通道）
+    \item $s_h$, $s_w$: 步长参数
+    \item $K_h$, $K_w$: 池化窗口大小
+\end{itemize}
+
+输出尺寸计算：
+
+$$
+H_{out} = \lfloor \frac{H_{in} - K_h}{s_h} \rfloor + 1
+$$
+
+$$
+W_{out} = \lfloor \frac{W_{in} - K_w}{s_w} \rfloor + 1
+$$
+
+\textbf{特点：}
+\begin{itemize}
+    \item 保持通道数不变
+    \item 减小空间维度
+    \item 增强特征的平移不变性
+    \item 降低计算量和参数量
+\end{itemize}
+
+\subsubsection{性能测试结果}
+
+测试配置：
+\begin{itemize}
+    \item 输入尺寸：(1, 320, 300, 300)
+    \item 输出尺寸：(1, 320, 150, 150)
+    \item 池化窗口：2×2, stride=2
+\end{itemize}
+
+\section{红黑排序Gauss-Seidel迭代法}
+
+\subsection{算法原理}
+
+Gauss-Seidel方法是求解线性方程组 $Ax = b$ 的经典迭代方法，常用于求解泊松方程等偏微分方程的离散化系统。对于二维泊松方程：
+
+$$
+-\nabla^2 u = f, \quad (x, y) \in \Omega
+$$
+
+使用有限差分离散化后得到：
+
+$$
+\frac{u_{i-1,j} + u_{i+1,j} + u_{i,j-1} + u_{i,j+1} - 4u_{i,j}}{h^2} = f_{i,j}
+$$
+
+标准Gauss-Seidel迭代格式：
+
+$$
+u_{i,j}^{(k+1)} = \frac{1}{4}(u_{i-1,j}^{(k+1)} + u_{i+1,j}^{(k)} + u_{i,j-1}^{(k+1)} + u_{i,j+1}^{(k)} - h^2 f_{i,j})
+$$
+
+\textbf{数据依赖问题：} 标准Gauss-Seidel方法在更新 $u_{i,j}$ 时依赖于已更新的 $u_{i-1,j}$ 和 $u_{i,j-1}$，这种数据依赖使得算法难以直接并行化。
+
+\subsection{红黑排序(Red-Black Ordering)}
+
+红黑排序将网格点分为两类：
+\begin{itemize}
+    \item \textbf{红点}：$i + j$ 为偶数
+    \item \textbf{黑点}：$i + j$ 为奇数
+\end{itemize}
+
+关键性质：
+\begin{itemize}
+    \item 红点只依赖于黑点，黑点只依赖于红点
+    \item 所有红点可以同时更新（并行）
+    \item 所有黑点可以同时更新（并行）
+\end{itemize}
+
+\subsection{性能测试结果}
+
+测试配置：
+\begin{itemize}
+    \item 网格规模：512×512×512 (约1.34亿个网格点)
+    \item 最大迭代次数：100
+    \item 收敛容差：1e-6
+    \item 测试环境：8核处理器
+\end{itemize}
+
+\textbf{实测结果：}
+
+\begin{table}[!htbp]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|c|c|c|c|}
+    \hline
+        方法 & 线程数 & 执行时间(s) & 每次迭代(ms) & 加速比 & 并行效率 & 迭代次数 & 最终残差 \\
+        \hline
+        串行红黑 & - & 36.226 & 362.26 & 1.00× & - & 100 & 1.71e+05 \\
+        并行红黑 & 1 & 108.871 & 1088.71 & 1.00× & 100\% & 100 & 1.71e+05 \\
+        并行红黑 & 2 & 63.867 & 638.67 & 1.70× & 85.2\% & 100 & 1.71e+05 \\
+        并行红黑 & 4 & 41.297 & 412.97 & 2.64× & 65.9\% & 100 & 1.71e+05 \\
+        并行红黑 & 8 & 29.504 & 295.04 & 3.69× & 46.1\% & 100 & 1.71e+05 \\
+        \hline
+    \end{tabular}
+    \caption{Gauss-Seidel方法性能测试结果}
+\end{table}
+
+\textbf{性能分析：}
+
+\begin{enumerate}
+    \item \textbf{加速比分析}：
+    \begin{itemize}
+        \item 2线程：1.70×，接近理论值2×，并行效率85.2\%
+        \item 4线程：2.64×，并行效率65.9\%
+        \item 8线程：3.69×，并行效率46.1\%，受内存带宽限制
+    \end{itemize}
+    
+    \item \textbf{串行红黑 vs 并行红黑(1线程)}：
+    \begin{itemize}
+        \item 串行版本(36.2s)明显快于并行版本单线程(108.9s)
+        \item 原因：并行版本的线程管理和同步开销
+        \item 说明：只有在多线程时并行版本才有优势
+    \end{itemize}
+    
+    \item \textbf{扩展性瓶颈}：
+    \begin{itemize}
+        \item 内存带宽：512³规模需要约8GB内存，8线程并发访问导致带宽饱和
+        \item 同步开销：每次迭代需要2次同步（红点+黑点）
+        \item 缓存一致性：多线程共享数据导致缓存失效
+    \end{itemize}
+    
+    \item \textbf{实际应用价值}：
+    \begin{itemize}
+        \item 对于超大规模问题(512³)，8线程仍可获得3.69×加速
+        \item 相比串行红黑(36.2s)，8线程并行(29.5s)仍有显著提升
+    \end{itemize}
+\end{enumerate}
+
+\section{三对角方程组并行求解}
+
+\subsection{问题描述}
+
+三对角线性方程组形式：
+
+$$
+\begin{bmatrix}
+b_0 & c_0 & & & \\
+a_1 & b_1 & c_1 & & \\
+& a_2 & b_2 & c_2 & \\
+& & \ddots & \ddots & \ddots \\
+& & & a_{n-1} & b_{n-1}
+\end{bmatrix}
+\begin{bmatrix}
+x_0 \\ x_1 \\ x_2 \\ \vdots \\ x_{n-1}
+\end{bmatrix}
+=
+\begin{bmatrix}
+d_0 \\ d_1 \\ d_2 \\ \vdots \\ d_{n-1}
+\end{bmatrix}
+$$
+
+三对角方程组广泛出现在：
+\begin{itemize}
+    \item 一维热传导方程
+    \item 样条插值
+    \item 有限差分法
+    \item 信号处理
+\end{itemize}
+
+\subsection{Thomas算法(追赶法)}
+
+\textbf{串行Thomas算法}是求解三对角方程组的经典方法，时间复杂度 $O(n)$。
+
+\textbf{前向消元(Forward Elimination)：}
+
+$$
+\gamma_0 = \frac{c_0}{b_0}, \quad \rho_0 = \frac{d_0}{b_0}
+$$
+
+对于 $i = 1, 2, \ldots, n-1$：
+
+$$
+\gamma_i = \frac{c_i}{b_i - a_i \gamma_{i-1}}, \quad \rho_i = \frac{d_i - a_i \rho_{i-1}}{b_i - a_i \gamma_{i-1}}
+$$
+
+\textbf{回代(Back Substitution)：}
+
+$$
+x_{n-1} = \rho_{n-1}
+$$
+
+对于 $i = n-2, n-3, \ldots, 0$：
+
+$$
+x_i = \rho_i - \gamma_i x_{i+1}
+$$
+
+\textbf{数据依赖：} Thomas算法存在严重的数据依赖：
+\begin{itemize}
+    \item 前向消元：每一步依赖上一步的结果
+    \item 回代：从后向前依赖
+\end{itemize}
+
+\subsection{性能测试结果}
+
+测试配置：多种规模的三对角系统，测试环境：8核处理器
+
+\subsubsection{测试数据集：test\_8k.txt (n=8,192)}
+
+\begin{table}[!htbp]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|c|c|}
+    \hline
+        算法版本 & 线程数 & 执行时间(ms) & 加速比 & 并行效率 & 最大残差 \\
+        \hline
+        串行Thomas & - & 0.148 & 1.00× & - & 3.55e-15 \\
+        Brugnano内部串行 & - & 0.296 & 0.50× & - & 3.55e-15 \\
+        Brugnano & 1 & 0.261 & 1.13× & - & 2.94e-01 \\
+        Brugnano & 2 & 1.070 & 0.28× & 14.0\% & 1.02e+00 \\
+        Brugnano & 4 & 0.766 & 0.39× & 9.7\% & 1.53e+00 \\
+        Brugnano & 8 & 1.007 & 0.29× & 3.7\% & 3.39e+00 \\
+        \hline
+    \end{tabular}
+    \caption{三对角求解性能测试 (8k)}
+\end{table}
+
+\subsubsection{测试数据集：test\_1024k.txt (n=1,048,576) - 最大规模}
+
+\begin{table}[!htbp]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|c|c|}
+    \hline
+        算法版本 & 线程数 & 执行时间(ms) & 加速比 & 并行效率 & 最大残差 \\
+        \hline
+        串行Thomas & - & 10.931 & 1.00× & - & 5.33e-15 \\
+        Brugnano内部串行 & - & 11.186 & 0.98× & - & 5.33e-15 \\
+        Brugnano & 1 & 19.341 & 0.58× & - & 4.42e-02 \\
+        Brugnano & 2 & 12.273 & 0.91× & 45.7\% & 1.33e+00 \\
+        Brugnano & 4 & 8.589 & 1.30× & 32.6\% & 2.68e+00 \\
+        Brugnano & 8 & 8.037 & 1.39× & 17.4\% & 2.83e+00 \\
+        \hline
+    \end{tabular}
+    \caption{三对角求解性能测试 (1024k)}
+\end{table}
+
+\textbf{性能分析：}
+
+\begin{enumerate}
+    \item \textbf{小规模数据(8k-16k)的问题}：
+    \begin{itemize}
+        \item 串行Thomas算法最快(0.148-0.253ms)
+        \item 并行版本反而更慢，线程开销 > 计算收益
+    \end{itemize}
+    
+    \item \textbf{大规模数据(1024k)}：
+    \begin{itemize}
+        \item \textbf{并行优势终于显现}：
+        \item 4线程：8.589ms，1.30×加速比
+        \item 8线程：8.037ms，1.39×加速比
+        \item 原因：计算量足够大，并行收益超过开销
+    \end{itemize}
+    
+    \item \textbf{数值稳定性问题}：
+    \begin{itemize}
+        \item 注意到Brugnano并行版本的最大残差显著增大
+        \item 串行Thomas：$10^{-15}$ 级别（机器精度）
+        \item 并行Brugnano：$10^0$ 级别（相对误差约1）
+        \item 对于工程应用，这些误差($10^0$量级)可能需要进一步优化
+    \end{itemize}
+    
+    \item \textbf{关键结论}：
+    \begin{itemize}
+        \item \textbf{三对角方程组的并行化具有挑战性}
+        \item 只有在规模极大($n > 10^6$)时才值得并行
+        \item Amdahl定律体现明显：规约系统求解成为串行瓶颈
+    \end{itemize}
+\end{enumerate}
+
+\section{总结与分析}
+
+\subsection{实测性能分析}
+
+\subsubsection{Gauss-Seidel方法的成功案例}
+
+\textbf{优势：}
+\begin{itemize}
+    \item 大规模问题(512³ ≈ 1.34亿网格点)
+    \item 计算密集型，每个网格点需要多次迭代
+    \item 红黑排序有效打破数据依赖
+\end{itemize}
+
+\textbf{实测表现：}
+\begin{itemize}
+    \item 8线程达到3.69×加速比
+    \item 相比串行红黑(36.2s)，8线程并行(29.5s)提速18.5\%
+    \item 并行效率：2线程85.2\%，4线程65.9\%，8线程46.1\%
+\end{itemize}
+
+\textbf{瓶颈分析：}
+\begin{itemize}
+    \item 内存带宽：8GB数据的并发访问
+    \item 同步点：每次迭代2次(红点+黑点)
+    \item 缓存一致性开销
+\end{itemize}
+
+\subsubsection{三对角求解的挑战}
+
+\textbf{困难：}
+\begin{itemize}
+    \item 强数据依赖：每一步依赖前一步
+    \item 规约系统求解：串行瓶颈
+    \item 额外开销：线程管理、数据重组
+\end{itemize}
+
+\textbf{实测表现：}
+\begin{itemize}
+    \item 小规模(8k-16k)：并行版本\textbf{更慢}，开销 > 收益
+    \item 中等规模(128k)：勉强持平，4线程1.14×
+    \item 大规模(1024k)：\textbf{终于盈利}，8线程1.39×
+\end{itemize}
+
+\textbf{关键发现：}
+\begin{itemize}
+    \item 并行只在n>100万时才有优势
+    \item Amdahl定律的经典体现
+    \item 数值误差增大(残差从$10^{-15}$增至$10^0$)
+\end{itemize}
+
+\subsection{结论}
+
+通过本项目的实现和测试，我们得出以下结论：
+
+\begin{enumerate}
+    \item \textbf{并行化不是万能药}
+    \begin{itemize}
+        \item 三对角求解：大部分情况串行更快
+        \item 只有超大规模(n>100万)才值得并行
+    \end{itemize}
+    
+    \item \textbf{打破数据依赖是关键}
+    \begin{itemize}
+        \item Gauss-Seidel红黑排序：成功案例
+        \item 三对角Brugnano：部分成功
+    \end{itemize}
+    
+    \item \textbf{实际加速比远低于理论值}
+    
+    主要原因：
+    \begin{itemize}
+        \item \textbf{Amdahl定律}：串行部分限制(规约系统)
+        \item \textbf{内存带宽}：8线程时带宽饱和(Gauss-Seidel 46\%效率)
+        \item \textbf{同步开销}：每次迭代需要等待
+        \item \textbf{缓存效应}：False sharing, 缓存失效
+    \end{itemize}
+    
+    \item \textbf{规模决定策略}
+    \begin{itemize}
+        \item $n < 10^4$: 串行优先
+        \item $10^4 < n < 10^6$: 视情况而定，测试决策
+        \item $n > 10^6$: 并行有显著优势
+    \end{itemize}
+    
+    \item \textbf{数值稳定性需注意}
+    \begin{itemize}
+        \item Brugnano残差从$10^{-15}$增至$10^0$
+        \item 浮点运算顺序改变导致误差累积
+        \item 工程应用需要额外验证
+    \end{itemize}
+\end{enumerate}
+
+\subsection{实验总结}
+
+\begin{table}[!htbp]
+    \centering
+    \begin{tabular}{|l|l|}
+    \hline
+        \textbf{项目} & \textbf{结果} \\
+        \hline
+        测试算法 & 3类(神经网络、迭代法、递推算法) \\
+        测试规模 & 从8k到512³(1.34亿) \\
+        最佳加速比 & 3.69× (Gauss-Seidel 8线程) \\
+        最差情况 & 0.28× (三对角8k数据2线程) \\
+        成功案例 & Gauss-Seidel大规模问题 \\
+        失败案例 & 三对角小规模问题 \\
+        \hline
+    \end{tabular}
+    \caption{实验总结}
+\end{table}
+
+\textbf{核心启示：} 并行计算需要权衡计算收益与并行开销，只有在问题规模足够大、数据依赖可打破的情况下，才能获得有效加速。盲目并行化可能适得其反。
+
+%%----------- 参考文献 -------------------%%
+%在reference.bib文件中填写参考文献，此处自动生成
+
+\reference
+
+
+\end{document}
