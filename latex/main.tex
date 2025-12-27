@@ -197,61 +197,18 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 在并行计算中，算子的性能特征可以分为两类：
 
 \subsubsection{计算密集型（Compute-Bound）}
+计算密集型任务的核心定义是算法的性能瓶颈在于计算单元（如ALU、FPU）的吞吐量，而非内存带宽。这类任务具有高计算访存比，即每次内存访问都会对应大量计算操作，算术强度显著偏高，浮点运算次数与内存访问字节数的比值远大于1，其性能瓶颈主要集中在处理器的浮点运算能力，因此在并行处理场景中通常能获得较好的加速比。
 
-\textbf{定义：}算法的性能瓶颈在于计算单元（ALU、FPU）的吞吐量，而非内存带宽。
+计算密集型任务的典型例子包括卷积操作和矩阵乘法，其中卷积操作以输入$(1,3,150,150)$、输出$(1,32,150,150)$、步长stride=1、填充padding=2、卷积核大小kernel\_size=$(5,5)$为例，算术强度约为386.27 FLOP/byte；而矩阵乘法对于$n \times n$规模的矩阵，算术强度约为$\frac{n}{3}$ FLOP/byte，且随着$n$的增大，算术强度的特征会更加显著。针对计算密集型任务的优化策略主要包括增加并行度，比如通过多线程、SIMD技术提升并行处理能力，同时可通过提高指令级并行、循环展开等方式进一步挖掘性能潜力。
 
-\textbf{特征：}
-\begin{itemize}
-    \item 高计算访存比（Compute-to-Memory Ratio）：每次内存访问对应大量计算操作
-    \item 算术强度大：浮点运算次数/内存访问字节数 $\gg$ 1
-    \item 瓶颈：处理器的浮点运算能力
-    \item 并行效果：通常能获得较好的加速比
-\end{itemize}
-
-\textbf{典型例子：}
-\begin{itemize}
-    \item \textbf{卷积操作}：以输入$(1,3,150,150)$、输出$(1,32,150,150)$、stride=1、padding=2、kernel\_size=$(5,5)$为例，算术强度约为386.27 FLOP/byte
-    \item \textbf{矩阵乘法}：对于$n \times n$矩阵，算术强度约为$\frac{n}{3}$ FLOP/byte，$n$越大越显著
-\end{itemize}
-
-\textbf{优化策略：}增加并行度（多线程、SIMD）、提高指令级并行、循环展开
-
-\textbf{补充特性：}
-\begin{itemize}
-    \item 并行加速比：接近线性；
-    \item 主要挑战：负载均衡；
-    \item 优化重点：增加计算并行度；
-    \item 性能特征：接近Peak FLOPS（屋顶的水平部分）。
-\end{itemize}
+计算密集型任务的并行加速比接近线性，其主要挑战在于实现负载均衡，避免部分计算单元处于空闲状态，优化重点始终围绕增加计算并行度展开，性能特征上则接近处理器的峰值浮点运算性能（Peak FLOPS），对应性能屋顶模型中的水平部分。
 
 \subsubsection{访存密集型（Memory-Bound）}
+访存密集型任务与计算密集型任务形成鲜明对比，其性能瓶颈在于内存系统的带宽，而非处理器的计算能力。这类任务的计算访存比偏低，每次内存访问仅对应少量计算操作，算术强度较小，浮点运算次数与内存访问字节数的比值远小于1，性能表现主要受限于内存带宽大小和缓存命中率高低，在并行处理场景中，由于内存带宽的限制，加速比提升空间会受到明显约束。
 
-\textbf{定义：}算法的性能瓶颈在于内存系统的带宽，而非计算能力。
+访存密集型任务的典型例子包括池化操作、Batch Normalization以及ReLU等激活函数，其中$2 \times 2$规模的池化操作算术强度约为0.31 FLOP/byte，Batch Normalization操作主要以内存读写为主，仅伴随少量简单运算，而ReLU等激活函数多为逐元素操作，计算量极小，核心开销集中在内存访问过程中。针对这类任务的优化策略需围绕内存访问效率展开，比如通过数据重用、分块处理等方式提高缓存命中率，减少不必要的内存访问次数，同时可通过预取优化、调整内存访问模式等手段进一步降低内存访问延迟、提升内存带宽利用率。
 
-\textbf{特征：}
-\begin{itemize}
-    \item 低计算访存比：每次内存访问对应很少的计算操作
-    \item 算术强度小：浮点运算次数/内存访问字节数 $\ll$ 1
-    \item 瓶颈：内存带宽、缓存命中率
-    \item 并行效果：容易受内存带宽限制，加速比受限
-\end{itemize}
-
-\textbf{典型例子：}
-\begin{itemize}
-    \item \textbf{池化操作}：对于$2\times2$池化，算术强度约为0.31 FLOP/byte
-    \item \textbf{Batch Normalization}：主要是内存读写和简单运算
-    \item \textbf{激活函数}（ReLU等）：逐元素操作，计算量极小
-\end{itemize}
-
-\textbf{优化策略：}提高缓存命中率（数据重用、分块）、减少内存访问次数、预取优化、内存访问模式优化
-
-\textbf{补充特性：}
-\begin{itemize}
-    \item 并行加速比：受限；
-    \item 主要挑战：内存带宽竞争；
-    \item 优化重点：减少内存访问、提高缓存效率；
-    \item 性能特征：受限于Memory Bandwidth（屋顶的斜线部分）。
-\end{itemize}
+访存密集型任务的并行加速比明显受限，核心挑战在于多线程并行时的内存带宽竞争，多个线程同时访问内存会导致带宽资源紧张，反而可能出现性能下降的情况，因此优化重点在于减少内存访问总量、提高缓存利用效率。其性能特征严格受限于内存带宽，无法充分发挥处理器的计算能力，对应性能屋顶模型中的斜线部分，即性能随内存带宽的提升而增长，却难以突破内存带宽带来的上限约束。
 \subsection{卷积算子(Conv2d) - 计算密集型}
 
 \subsubsection{算法原理}
@@ -301,12 +258,8 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
     }
 }
 \end{lstlisting}
-\textbf{问题分析：}
-\begin{itemize}
-    \item \texttt{cnt[c]++} 存在数据竞争，无法直接并行化；
-    \item \texttt{weight\_pos} 采用循环累加方式，存在跨线程依赖；
-    \item 索引计算逻辑复杂，显著降低执行性能。
-\end{itemize}
+\textbf{问题分析：}\texttt{cnt[c]++}操作存在数据竞争而无法直接并行化，\texttt{weight\_pos}采用循环累加的实现方式导致存在跨线程依赖，同时索引计算逻辑复杂也显著降低了执行性能。\\
+\\
 \textbf{版本2：并行实现} - 改为静态索引计算，在输出通道维度并行，消除依赖但并行粒度仅32。
 
 \begin{lstlisting}[language=C++]
@@ -334,12 +287,8 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
 \end{lstlisting}
 
 \textbf{问题分析：}
-\begin{itemize}
-    \item 索引计算仍然复杂，计算开销大；
-    \item 多次重复计算相同的索引；
-    \item 可能存在伪共享（False Sharing）问题。
-\end{itemize}
-
+索引计算逻辑仍较为复杂，导致计算开销偏高；相同索引被多次重复计算，进一步增加了性能损耗；此外，代码还可能存在伪共享（False Sharing）问题，影响并行执行效率。\\
+\\
 \textbf{版本3：深度优化实现} - 针对版本2的瓶颈实现三方面优化：
 \begin{enumerate}
     \item \textbf{并行化Padding}：按通道并行+\texttt{memcpy}批量复制，padding时间降至原来的1/5
@@ -347,8 +296,7 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
     \item \textbf{Bias融合}：在卷积计算时直接加bias，消除720K次额外内存访问
 \end{enumerate}
 \begin{lstlisting}[language=C++]
-    // 二维空间并行：任务数 = 150 × 150 = 22,500
-    // 每个线程处理一个输出位置的所有通道，避免false sharing
+    // 二维空间并行：任务数 = 150 × 150 = 22,500 每个线程处理一个输出位置的所有通道，避免false sharing
     #pragma omp parallel for collapse(2) schedule(static)
     for (int oh = 0; oh < out_h; ++oh) {
         for (int ow = 0; ow < out_w; ++ow) {
@@ -364,7 +312,6 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
                     const float* weight_ptr = &weight[oc * channel_in * kernel_max + ic * kernel_max];
                     // 5×5卷积核完全手动展开（25项）
                     ...(展开代码略)
-                // 优化：直接加bias再写入，避免后续额外遍历
                 output.tensor[oc * out_h * out_w + oh * out_w + ow] = sum + bias[oc];
             }
         }
@@ -416,10 +363,10 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
     \hline
         并行维度 & 并行数 & 每线程计算量 & 开销占比 & 推荐度 \\
         \hline
-        width(w) & 150 & $\sim$600 FLOP & >99\% & ❌ 极差 \\
-        height(h) & 150 & $\sim$90K FLOP & $\sim$10\% & ⚠️ 较差 \\
-        输入通道(ic) & 3 & $\sim$16M FLOP & <0.1\% & ⚠️ 一般 \\
-        \textbf{输出通道(oc)} & \textbf{32} & \textbf{$\sim$1.7M FLOP} & \textbf{<1\%} & \textbf{✅ 最佳} \\
+        width(w) & 150 & $\sim$600 FLOP & >99\% &  极差 \\
+        height(h) & 150 & $\sim$90K FLOP & $\sim$10\% &  较差 \\
+        输入通道(ic) & 3 & $\sim$16M FLOP & <0.1\% &  一般 \\
+        \textbf{输出通道(oc)} & \textbf{32} & \textbf{$\sim$1.7M FLOP} & \textbf{<1\%} & \textbf{ 最佳} \\
         \hline
     \end{tabular}
 \end{table}
@@ -443,27 +390,20 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
 
 \subsubsection{并行实现与性能}
 \textbf{版本1：普通并行} - 仅添加\texttt{\#pragma omp parallel for}，在通道维度并行。
-\comment{括号可以放到同一行}
+
 \begin{lstlisting}[language=C++]
-    for (int d = 0; d < input.dim; ++d)
-    {
+    for (int d = 0; d < input.dim; ++d){
         // #pragma omp parallel for (普通并行只要在这加入并行即可)
-        for (int c = 0; c < input.channel; ++c)
-        {
-            for (int oh = 0; oh < out_h; ++oh)
-            {
-                for (int ow = 0; ow < out_w; ++ow)
-                {
+        for (int c = 0; c < input.channel; ++c){
+            for (int oh = 0; oh < out_h; ++oh){
+                for (int ow = 0; ow < out_w; ++ow){
                     float sum = 0.0;
                     int count = 0;
-                    for (int kh = 0; kh < avgp_kernel_size[0]; ++kh)
-                    {
-                        for (int kw = 0; kw < avgp_kernel_size[1]; ++kw)
-                        {
+                    for (int kh = 0; kh < avgp_kernel_size[0]; ++kh){
+                        for (int kw = 0; kw < avgp_kernel_size[1]; ++kw){
                             int h = oh * avgp_stride[1] + kh;
                             int w = ow * avgp_stride[0] + kw;
-                            if (h < input_h && w < input_w)
-                            {
+                            if (h < input_h && w < input_w){
                                 int index = (d * input.channel * input_h * input_w) + (c * input_h * input_w) + (h * input_w) + w;
                                 sum += input[index];
                                 count++;
@@ -480,89 +420,35 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
 \textbf{版本2：访存优化} - 通过预计算通道指针、优化边界检查和针对2x2池化的特殊优化，提升内存访问效率。
 
 \begin{lstlisting}[language=C++]
-    for (int d = 0; d < input.dim; ++d)
-    {
-        // Parallelize over channels - optimal granularity
-        #pragma omp parallel for
-        for (int c = 0; c < input.channel; ++c)
-        {
-            // Precompute channel offsets using pointers
-            const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
-            float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
-            
-            if (use_2x2_optimized)
-            {
-                // Specialized optimization for 2x2 kernel with stride 2
-                // Unroll kernel loops for better performance
-                for (int oh = 0; oh < out_h; ++oh)
-                {
-                    for (int ow = 0; ow < out_w; ++ow)
-                    {
-                        // Input coordinates
-                        int h_start = oh * 2;
-                        int w_start = ow * 2;
-                        
-                        // Check if all 4 pixels are within bounds
-                        if (h_start + 1 < input_h && w_start + 1 < input_w)
-                        {
-                            // Direct access to 4 pixels in 2x2 kernel
-                            int idx_00 = h_start * input_w + w_start;
-                            int idx_01 = idx_00 + 1;
-                            int idx_10 = idx_00 + input_w;
-                            int idx_11 = idx_10 + 1;
-                            
-                            // Compute average of 4 pixels
-                            float sum = input_channel_ptr[idx_00] + 
-                                       input_channel_ptr[idx_01] + 
-                                       input_channel_ptr[idx_10] + 
-                                       input_channel_ptr[idx_11];
-                            
-                            output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // Multiply instead of divide
-                        }
-                        else
-                        {
-                            // Boundary case - use general approach
-                            float sum = 0.0f;
-                            int count = 0;
-                            for (int kh = 0; kh < 2; ++kh)
-                            {
-                                for (int kw = 0; kw < 2; ++kw)
-                                {
-                                    int h = h_start + kh;
-                                    int w = w_start + kw;
-                                    if (h < input_h && w < input_w)
-                                    {
-                                        sum += input_channel_ptr[h * input_w + w];
-                                        count++;
-                                    }
-                                }
-                            }
-                            output_channel_ptr[oh * out_w + ow] = sum / count;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // General case for arbitrary kernel sizes
-                for (int oh = 0; oh < out_h; ++oh)
-                {
-                    for (int ow = 0; ow < out_w; ++ow)
-                    {
+    for (int d = 0; d < input.dim; ++d) {
+    #pragma omp parallel for
+    for (int c = 0; c < input.channel; ++c) {
+        // 使用指针预计算通道偏移量
+        const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
+        float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
+            // 针对步长为2的2x2卷积核的专用优化
+            for (int oh = 0; oh < out_h; ++oh) {
+                for (int ow = 0; ow < out_w; ++ow) {
+                    int h_start = oh * 2;
+                    int w_start = ow * 2;
+                    if (h_start + 1 < input_h && w_start + 1 < input_w) {
+                        int idx_00 = h_start * input_w + w_start;
+                        int idx_01 = idx_00 + 1;
+                        int idx_10 = idx_00 + input_w;
+                        int idx_11 = idx_10 + 1;
+                        float sum = input_channel_ptr[idx_00] + 
+                                   input_channel_ptr[idx_01] + 
+                                   input_channel_ptr[idx_10] + 
+                                   input_channel_ptr[idx_11];
+                        output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // 使用乘法代替除法（更高效）
+                    } else { // 边界情况 - 使用通用处理方式
                         float sum = 0.0f;
                         int count = 0;
-                        
-                        int h_start = oh * stride_h;
-                        int w_start = ow * stride_w;
-                        
-                        for (int kh = 0; kh < kernel_h; ++kh)
-                        {
-                            for (int kw = 0; kw < kernel_w; ++kw)
-                            {
+                        for (int kh = 0; kh < 2; ++kh) {
+                            for (int kw = 0; kw < 2; ++kw) {
                                 int h = h_start + kh;
                                 int w = w_start + kw;
-                                if (h < input_h && w < input_w)
-                                {
+                                if (h < input_h && w < input_w) {
                                     sum += input_channel_ptr[h * input_w + w];
                                     count++;
                                 }
@@ -571,9 +457,10 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
                         output_channel_ptr[oh * out_w + ow] = sum / count;
                     }
                 }
-            }
+            }                 
         }
     }
+}
 \end{lstlisting}
 
 池化操作属典型访存密集型算子，在通道维度并行，使用连续内存访问模式提高缓存命中率。
@@ -625,8 +512,8 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
         & 4  & 4.20  & 5.05  & 3.02× & 75.50\% \\
         & 8  & 2.82  & 3.49  & 4.50× & 56.25\% \\
         & 10 & 2.57  & 3.32  & 4.94× & 49.40\% \\
-        & 16 & 2.50  & 3.12  & 5.08× & 31.75\% \\
-        & 20 & 2.66  & 3.11  & \textbf{4.77×} & 23.85\% \\
+        & 16 & 2.50  & 3.12  & \textbf{5.08×} & 31.75\% \\
+        & 20 & 2.66  & 3.11  & 4.77× & 23.85\% \\
         \bottomrule
     \end{tabular}
     }
@@ -670,23 +557,14 @@ $$
 
 \subsection{红黑排序(Red-Black Ordering)}
 
-红黑排序通过将网格点按照\textbf{棋盘染色}方式分为两类，打破了串行数据依赖：
+红黑排序通过将网格点按照棋盘染色方式分为两类，以此打破串行数据依赖，实现并行更新。
+具体而言，二维场景下的网格点按坐标关系划分，满足$i + j$为偶数的点定义为红点，$i + j$为奇数的点定义为黑点；
+三维场景下则以$i + j + k$的奇偶性作为划分依据，$i + j + k$为偶数时为红点，为奇数时为黑点。这一排序方式具备关键性质，也是其打破数据依赖的核心所在：
+红点的四邻点（二维场景）或六邻点（三维场景）全部为黑点，反之黑点的邻点也全部为红点，不存在同色点互为邻点的情况，由此可得出同色点之间无任何数据依赖的结论，这类同色点能够实现完全并行更新，大幅提升并行处理效率。
 
-\begin{itemize}
-    \item \textbf{二维情况}：红点($i + j$为偶数)，黑点($i + j$为奇数)
-    \item \textbf{三维情况}：红点($i + j + k$为偶数)，黑点($i + j + k$为奇数)
-\end{itemize}
-
-\textbf{关键性质}（打破依赖的核心）：
-\begin{itemize}
-    \item 红点的四邻点（2D）或六邻点（3D）\textbf{全部是黑点}
-    \item 黑点的邻点\textbf{全部是红点}
-    \item 因此：\textbf{同色点之间无依赖}，可以完全并行更新
-\end{itemize}
-
-\begin{figure}
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.4\textwidth]{figures/RB-gauss.png}
+    \includegraphics[width=0.3\textwidth]{figures/RB-gauss.png}
     \caption{二维红黑网格示意图}
     \label{fig:red_black_grid}
 \end{figure}
@@ -703,29 +581,24 @@ $$
 
 \subsubsection{Barrier同步原理}
 
-\textbf{Barrier（屏障）}是一种线程同步原语，确保所有线程到达同一执行点后才能继续。在OpenMP中：
-
-\begin{itemize}
-    \item \texttt{\#pragma omp for}：循环结束时有\textbf{隐式barrier}
-    \item \texttt{\#pragma omp for nowait}：取消隐式barrier
-    \item \texttt{\#pragma omp barrier}：显式同步点
-\end{itemize}
+\textbf{Barrier（屏障）}是一种线程同步原语，确保所有线程到达同一执行点后才能继续。
+在OpenMP中，Barrier同步主要以隐式屏障和显式屏障两种形式存在：\texttt{\#pragma omp for}指令所引导的循环区域，在循环执行结束后会自动插入隐式barrier，
+保障所有参与循环任务分配的线程完成各自迭代后再进入后续代码段；若在\texttt{\#pragma omp for}指令后添加nowait关键字，则会取消这一默认的隐式barrier，
+允许完成任务的线程直接继续执行而无需等待其他线程；此外，用户可通过\texttt{\#pragma omp barrier}指令手动设置显式同步点，强制所有线程在该位置同步等待，
+精准控制线程执行节奏。
 
 \subsubsection{红黑GS中的Barrier需求}
 
-红黑GS每次迭代需要2个Barrier：
+在红黑高斯-塞德尔（红黑GS）迭代算法中，因迭代更新过程存在严格的数据依赖关系，
+每次迭代都需要设置两个Barrier以保障计算正确性。
+第一个Barrier用于确保所有红点的更新操作全部完成后，
+黑点才能开始读取红点的新值进行更新，避免黑点因读取未更新的红点旧值而产生计算误差；第二个Barrier则用于确保所有黑点的更新操作结束后，
+下一次迭代才能正式启动，保证每一轮迭代都基于上一轮完整的红点和黑点更新结果，避免迭代过程交叉干扰。
 
-\begin{itemize}
-    \item \textbf{Barrier \#1}：确保所有红点更新完成后，黑点才能读取新值
-    \item \textbf{Barrier \#2}：确保所有黑点更新完成后，下一次迭代才能开始
-\end{itemize}
-
-\textbf{必须同步的原因：}
-\begin{itemize}
-    \item 数据依赖：黑点更新需要\textbf{所有}红点的新值（跨线程依赖）
-    \item 内存一致性：多核CPU的缓存需要同步
-    \item 迭代正确性：第$k+1$次迭代必须基于第$k$次迭代的完整结果
-\end{itemize}
+红黑GS迭代中必须进行上述Barrier同步控制，核心原因有三：一是数据依赖约束，
+黑点更新需依赖所有红点的新值，这种跨线程依赖关系决定了必须通过Barrier等待所有红点更新完成，
+否则会出现数据读取不完整问题；二是内存一致性需求，多核CPU架构下各核心有独立缓存，若不通过Barrier同步，可能导致不同核心缓存数据不一致，
+引发计算结果偏差；三是迭代正确性保障，第$k+1$次迭代必须完全基于第$k$次迭代的完整结果，通过两个Barrier分别确保红点、黑点更新全部完成，才能避免迭代失真。
 
 \subsection{小规模问题的并行困境}
 
@@ -749,37 +622,29 @@ $$
     \end{tabular}
 \end{table}
 
-\textbf{现象：}2线程比单线程慢14倍，8线程慢58倍！
+\textbf{现象：}2线程比单线程慢14倍，8线程慢58倍
 
 \textbf{根本原因分析：}
 
-\textbf{① 计算量极小，远小于同步开销}
+第一，计算量规模极小，其耗时远低于并行同步带来的开销。
+以单次迭代、64×64网格的计算场景为例，计算量可具体量化为：64×64网格对应2048个计算点，
+每个点需执行6次浮点运算（FLOPs），总计产生12288 FLOPs的计算量；
+若基于3.5 GHz主频的单核处理器（每时钟周期可执行4次浮点运算）测算，单核完成该计算量的时间仅约0.88微秒。
+与之形成鲜明对比的是并行同步开销：8线程下单次Barrier同步的延迟约为5至20微秒，
+而每次迭代过程需执行2次Barrier同步，由此单次迭代的同步耗时可达10至40微秒。
+综上可明确得出结论：同步耗时远大于计算耗时，二者差距在10倍以上。
 
-\begin{itemize}
-    \item 计算量（单次迭代，64×64网格）：2048个点 × 6 FLOPs = 12,288 FLOPs
-    \item 单核计算时间（假设3.5 GHz，4 FLOP/cycle）：$\approx$ 0.88微秒
-    \item 同步开销（单次Barrier）：8线程barrier延迟 $\approx$ 5-20微秒
-    \item 每次迭代2个barrier：10-40微秒
-\end{itemize}
-
-\textbf{结论：同步时间 >> 计算时间（10倍以上）！}
-
-\textbf{② Amdahl定律的体现}
-
-对于小规模问题（64×64，10000次迭代）：
-\begin{itemize}
-    \item 计算时间：0.88μs × 10000 × 2 = 17.6 ms（可并行）
-    \item 同步时间：15μs × 10000 × 2 = 300 ms（串行）
-    \item 串行占比：$1-P = \frac{300}{300+17.6} \approx 94\%$
-\end{itemize}
-
-代入Amdahl定律（8线程）：
-
-$$
+第二，该现象也是Amdahl定律的典型体现。针对64×64网格、10000次迭代的小规模问题场景进行拆解：
+可并行的计算时间为$0.88\mu\text{s} \times 10000 \times 2 = 17.6 \text{ ms}$，
+而串行的同步时间为$15\mu\text{s} \times 10000 \times 2 = 300 \text{ ms}$；
+据此计算串行部分占总耗时的比例为$1-P = \frac{300}{300+17.6} \approx 94\%$。
+将该比例代入8线程下的Amdahl定律公式：
+\[
 S_p = \frac{1}{0.94 + \frac{0.06}{8}} \approx 1.06\times
-$$
+\]
+理论上并行加速比约为1.06倍，但实际测试得到的加速比仅为0.02倍，远低于理论值。
+导致这一偏差的原因包括缓存失效、NUMA架构下的远程内存访问开销、False Sharing（伪共享）问题，以及操作系统调度过程中的抖动现象等。
 
-\textbf{实际结果：0.02×（远低于理论值）！}原因包括：缓存失效、NUMA远程内存访问、False Sharing、操作系统调度抖动。
 
 \subsubsection{规模阈值分析}
 
@@ -793,7 +658,7 @@ $$
 
 代入参数（3.5 GHz，4 FLOP/cycle，$T_{barrier}=15\mu s$），解得：$N > 1183$
 
-\textbf{结论：对于2D问题，$N < 1024$时并行收益有限！}
+\textbf{结论：对于2D问题，$N < 1024$时并行收益有限}
 
 实测验证如\autoref{tab:gs_scale_threshold}所示。
 
@@ -805,11 +670,11 @@ $$
     \hline
         网格规模 & 2线程 & 4线程 & 8线程 & 结论 \\
         \hline
-        64×64 & 0.06× ❌ & 0.03× ❌ & 0.02× ❌ & 完全失败 \\
-        128×128 & 0.26× ❌ & 0.13× ❌ & 0.05× ❌ & 灾难性 \\
-        256×256 & 0.79× ⚠️ & 0.62× ❌ & 0.27× ❌ & 仍然负优化 \\
-        512×512 & 1.66× ✅ & 1.89× ✅ & 1.71× ✅ & \textbf{开始有效} \\
-        1024×1024 & 1.89× ✅ & 2.58× ✅ & 3.30× ✅ & 效果良好 \\
+        64×64 & 0.06×  & 0.03×  & 0.02×  & 完全失败 \\
+        128×128 & 0.26×  & 0.13×  & 0.05×  & 灾难性 \\
+        256×256 & 0.79×  & 0.62×  & 0.27×  & 仍然负优化 \\
+        512×512 & 1.66×  & 1.89×  & 1.71×  & \textbf{开始有效} \\
+        1024×1024 & 1.89×  & 2.58×  & 3.30×  & 效果良好 \\
         \hline
     \end{tabular}
 \end{table}
@@ -817,7 +682,7 @@ $$
 \textbf{关键发现：}
 \begin{itemize}
     \item 2D临界点：512×512规模开始有效并行（与理论预测$N>1183$基本吻合）
-    \item 3D优势明显：由于计算量是2D的$N$倍，64³就能获得有效加速
+    \item 3D优势明显：由于计算量是2D的$N$倍，$64^3$就能获得有效加速
     \item 小规模灾难：64×64和128×128的2D问题，多线程反而慢5-50倍
 \end{itemize}
 
@@ -840,7 +705,6 @@ $$
     // gauss_seidel_2d.cpp 核心代码
 void solve_parallel_redblack(/* ... */) {
     omp_set_num_threads(num_threads);
-    
     // 自适应块大小（根据规模和线程数）
     int tile_size;
     if (N <= 64) {
@@ -854,7 +718,6 @@ void solve_parallel_redblack(/* ... */) {
     } else {
         tile_size = 128;
     }
-    
     for (int iter = 0; iter < max_iter; ++iter) {
         // === 红点更新阶段 ===
         #pragma omp for schedule(static) collapse(2) nowait
@@ -886,7 +749,6 @@ void solve_parallel_redblack(/* ... */) {
                 }
             }
         }
-        
         #pragma omp barrier  // 确保所有黑点更新完成
     }
 }
@@ -914,28 +776,23 @@ void solve_4level_tiling(/* ... */) {
     // 两级tiling参数
     const int L3_TILE = (N >= 512) ? 128 : 64;  // 外层：L3 Cache块
     const int L1_TILE = 16;                      // 内层：L1 Cache块
-    
     for (int iter = 0; iter < max_iter; ++iter) {
         // === 红点更新：两级分块 ===
         #pragma omp for schedule(static) nowait
         for (int bi = 1; bi <= N; bi += L3_TILE) {
             int bi_end = std::min(bi + L3_TILE, N + 1);
-            
             // L1 Cache级别的细粒度分块
             for (int ti = bi; ti < bi_end; ti += L1_TILE) {
                 int ti_end = std::min(ti + L1_TILE, bi_end);
-                
                 // 预取优化：提前加载下一个L1块
                 #ifdef __x86_64__
                 if (ti + L1_TILE < bi_end) {
                     _mm_prefetch((const char*)&U(ti + L1_TILE, 1), _MM_HINT_T0);
                 }
                 #endif
-                
                 // 内核循环：访问L1块内的红点
                 for (int i = ti; i < ti_end; ++i) {
                     int j_start = (i % 2 == 1) ? 1 : 2;  // 红点起始位置
-                    
                     for (int j = j_start; j <= N; j += 2) {
                         // 显式寄存器缓存邻点值
                         double reg[4];
@@ -943,16 +800,13 @@ void solve_4level_tiling(/* ... */) {
                         reg[1] = U(i+1, j);
                         reg[2] = U(i, j-1);
                         reg[3] = U(i, j+1);
-                        
-                        U(i, j) = 0.25 * (reg[0] + reg[1] + reg[2] + reg[3] + 
-                                         h2 * F(i-1, j-1));
+                        U(i, j) = 0.25 * (reg[0] + reg[1] + reg[2] + 
+                                reg[3] + h2 * F(i-1, j-1));
                     }
                 }
             }
         }
-        
         #pragma omp barrier
-        
         // === 黑点更新：相同的两级分块策略 ===
         // ... (结构相同)
     }
@@ -962,7 +816,7 @@ void solve_4level_tiling(/* ... */) {
 
 \subsection{性能测试结果}
 
-详细的性能测试数据见附录。我们只对比具有实际并行收益（加速比>1）的规模，主要发现如\autoref{tab:gs_methods_summary}所示。
+详细的性能测试数据见\autoref{appendix:data}。我们只对比具有实际并行收益（加速比>1）的规模，主要发现如\autoref {tab:gs_methods_summary}所示。
 
 \begin{table}[!htbp]
     \centering
@@ -976,58 +830,22 @@ void solve_4level_tiling(/* ... */) {
         2D, 1024×1024 & \textbf{Tiled} & 272.70ms (8线程) & \textbf{快43\%} \\
         2D, 2048×2048 & \textbf{Tiled} & 2810.09ms (8线程) & 快15\% \\
         \hline
-        3D, 64³ & \textbf{Tiled} & 15.88ms (4线程) & 快14\% \\
-        3D, 128³ & \textbf{Tiled} & 228.51ms (8线程) & 快26\% \\
-        3D, 256³ & Original & 2374.13ms (8线程) & 快7\% \\
-        3D, 512³ & \textbf{Tiled} & 16941.90ms (16线程) & 快3\% \\
+        3D, $64^3$ & \textbf{Tiled} & 15.88ms (4线程) & 快14\% \\
+        3D, $128^3$ & \textbf{Tiled} & 228.51ms (8线程) & 快26\% \\
+        3D, $256^3$ & Original & 2374.13ms (8线程) & 快7\% \\
+        3D, $512^3$ & \textbf{Tiled} & 16941.90ms (16线程) & 快3\% \\
         \hline
     \end{tabular}
 \end{table}
 
 \textbf{关键发现：}
 \begin{itemize}
-    \item \textbf{Tiled全面领先}：在7个测试规模中，Tiled方法赢得6场，仅在3D 256³输给Original
-    \item \textbf{中等规模优势显著}：1024×1024（快43\%）和128³（快26\%）规模下，分块优化效果最佳
-    \item \textbf{超大规模仍有效}：2048×2048和512³规模下，Tiled依然保持15\%和3\%的领先
-    \item \textbf{唯一例外}：3D 256³规模下Original快7\%，可能因缓存容量与分块大小不匹配
+    \item \textbf{Tiled全面领先}：在7个测试规模中，Tiled方法赢得6场，仅在3D $256^3$输给Original
+    \item \textbf{中等规模优势显著}：1024×1024（快43\%）和$128^3$（快26\%）规模下，分块优化效果最佳
+    \item \textbf{超大规模仍有效}：2048×2048和$512^3$规模下，Tiled依然保持15\%和3\%的领先
+    \item \textbf{唯一例外}：3D $256^3$规模下Original快7\%，可能因缓存容量与分块大小不匹配
 \end{itemize}
 
-\subsection{实用性建议}
-
-\textbf{方法选择决策树：}
-
-\begin{itemize}
-    \item \textbf{2D问题：}
-    \begin{itemize}
-        \item $N < 512$：使用\textbf{串行版本}（并行完全无收益）
-        \item $N \geq 512$：推荐\textbf{Tiled方法}（全面领先15-43\%）
-        \begin{itemize}
-            \item 512×512: 4线程（86.86ms）
-            \item 1024×1024: 8线程（272.70ms，优势最大）
-            \item 2048×2048: 8线程（2810.09ms）
-        \end{itemize}
-    \end{itemize}
-    
-    \item \textbf{3D问题：}
-    \begin{itemize}
-        \item $N < 64$：使用\textbf{串行版本}
-        \item $N = 256$：推荐\textbf{Original，8线程}（唯一例外，快7\%）
-        \item 其他规模：推荐\textbf{Tiled方法}
-        \begin{itemize}
-            \item 64³: 4线程（15.88ms，快14\%）
-            \item 128³: 8线程（228.51ms，快26\%）
-            \item 512³: 16线程（16941.90ms）
-        \end{itemize}
-    \end{itemize}
-\end{itemize}
-
-\textbf{线程配置建议：}
-\begin{itemize}
-    \item ✓ 中等规模（2D: 512-1024，3D: 64-128）：4-8线程最优
-    \item ✓ 超大规模（2D: 2048+，3D: 512+）：8-16线程
-    \item ❌ 避免超过16线程：实测20线程性能反而下降5-15\%
-    \item ❌ 小规模禁用并行：同步开销占比>90\%，严重负优化
-\end{itemize}
 
 \subsection{小结}
 
@@ -1041,6 +859,7 @@ void solve_4level_tiling(/* ... */) {
     \item \textbf{最佳配置实测}：1024×1024规模下，Tiled+8线程达到272.70ms（比Original快43\%，相对单线程3.63×加速）
 \end{itemize}
 
+\clearpage
 \section{三对角方程组并行求解}
 
 \subsection{问题定义}
@@ -1064,13 +883,8 @@ d_0 \\ d_1 \\ d_2 \\ \vdots \\ d_{n-1}
 \end{bmatrix}
 $$
 
-三对角方程组广泛出现于：
-\begin{itemize}
-    \item 一维热传导方程的隐式差分格式
-    \item 样条插值问题
-    \item 边界值问题的数值解
-    \item 金融工程中的期权定价模型
-\end{itemize}
+三对角方程组广泛出现于：一维热传导方程的隐式差分格式、样条插值问题、
+边界值问题的数值解以及金融工程中的期权定价模型等领域。
 
 \subsection{Thomas算法（串行基准）}
 
@@ -1198,41 +1012,34 @@ Thomas算法的依赖链长度为$O(n)$，是最长的依赖链之一。打破�
     \hline
         规模 & 串行时间 & 8线程时间 & 加速比 \\
         \hline
-        8K & 0.23ms & 1.30ms (Brugnano) & 0.18× ❌ \\
-        16K & 0.24ms & 1.38ms (Brugnano) & 0.17× ❌ \\
-        128K & 1.45ms & 2.80ms (Brugnano) & 0.52× ❌ \\
-        \textbf{1M} & 10.36ms & 8.68ms (Brugnano) & \textbf{1.19× ✅} \\
-        4M & 66.07ms & 40.10ms (Brugnano) & \textbf{1.65× ✅} \\
+        8K & 0.23ms & 1.30ms (Brugnano) & 0.18×  \\
+        16K & 0.24ms & 1.38ms (Brugnano) & 0.17×  \\
+        128K & 1.45ms & 2.80ms (Brugnano) & 0.52×  \\
+        \textbf{1M} & 10.36ms & 8.68ms (Brugnano) & \textbf{1.19× } \\
+        4M & 66.07ms & 40.10ms (Brugnano) & \textbf{1.65× } \\
         \hline
     \end{tabular}
 \end{table}
 
-\textbf{关键发现：}
-\begin{itemize}
-    \item 规模 < 128K：并行完全失败，8线程慢2-6倍
-    \item 1M是并行有效的临界点，8线程开始有效加速
-    \item 4M规模：并行优势明显，加速比达1.65×
-\end{itemize}
+\textbf{关键发现：}规模 < 128K时并行完全失败，8线程慢2-6倍。1M是并行有效的临界点，8线程开始有效加速。4M规模：并行优势明显，加速比达1.65×
+
 
 \subsubsection{难点3：算法本身开销}
 
 \textbf{Brugnano方法额外开销：}
-\begin{itemize}
-    \item 局部数据复制：$O(n)$
-    \item 修正Thomas算法：比标准Thomas多$\sim$20\%计算
-    \item 规约系统求解：$O(P^2)$，$P$较大时不可忽略
-\end{itemize}
+Brugnano方法存在多方面的额外开销：其一，局部数据复制操作的时间复杂度为$O(n)$；
+其二，该方法中修正后的Thomas算法相比标准Thomas算法，计算量增加了约20\%；
+其三，规约系统求解环节的复杂度为$O(P^2)$，当参数$P$取值较大时，这部分开销会显著增加，无法被忽略。
 
 \textbf{Recursive Doubling额外开销：}
-\begin{itemize}
-    \item 计算量：$O(n \log n)$ vs Thomas的$O(n)$
-    \item 单线程慢2-2.5倍
-    \item 数值误差累积：$O(\log n)$步可能导致精度损失
-\end{itemize}
+Recursive Doubling方法的额外开销主要体现在计算量、执行效率与数值精度三个维度：
+从计算量来看，该方法的时间复杂度为$O(n \log n)$，而标准Thomas算法仅为$O(n)$，
+复杂度的提升直接导致单线程场景下Recursive Doubling的执行速度比Thomas算法慢2至2.5倍；
+此外，该方法存在数值误差累积的问题，由于计算过程涉及$O(\log n)$步迭代，可能会造成计算精度的损失。
 
 \subsection{性能测试结果}
 
-详细的性能测试数据见附录。主要发现如\autoref{tab:tridiag_summary}所示。
+详细的性能测试数据见附录。主要发现如\autoref{tab:algo_perf_summary_new}所示。
 
 \begin{table}[!htbp]
     \centering
@@ -1265,170 +1072,41 @@ Thomas算法的依赖链长度为$O(n)$，是最长的依赖链之一。打破�
     \item \textbf{Brugnano}：另一种并行方法，性能略逊于RecursiveDoubling（慢5-20\%），但实现更简单
 \end{itemize}
 
-\subsection{实用性建议}
-
-\textbf{算法选择决策树：}
-
-\begin{itemize}
-    \item $n < 1M$：\textbf{必须使用串行Thomas}，并行完全无收益（甚至负优化）
-    \item $1M \leq n < 10M$：\textbf{RecursiveDoubling，16线程}
-    \begin{itemize}
-        \item 1M: 加速比1.43×（相对Sequential），推荐16线程
-        \item 4M: 加速比2.03×（相对Sequential），推荐16线程
-        \item 8M: 加速比2.28×（相对Sequential），推荐16线程
-    \end{itemize}
-    \item $10M \leq n < 100M$：\textbf{RecursiveDoubling，16-20线程}，加速比2.4-2.7×
-    \item $n \geq 100M$：\textbf{考虑GPU加速}或分布式求解
-\end{itemize}
-
-\textbf{特别警告：}
-\begin{itemize}
-    \item ❌ 规模<1M使用并行会导致2-6倍性能下降
-    \item ⚠️ RecursiveDoubling单线程比Sequential慢2.5×，必须使用≥8线程才有收益
-    \item ⚠️ 超过16线程收益递减，20线程可能反而慢（如4M规模）
-\end{itemize}
-
 \subsection{小结}
-
-本节通过三对角方程组的并行求解，揭示了具有长串行依赖链的算法并行化的极端困难：
-
-\begin{itemize}
-    \item \textbf{依赖链难打破}：Thomas算法的$O(n)$依赖链需要复杂的递归策略才能并行化
-    \item \textbf{规模阈值极高}：需要$n \geq 1M$才能获得有效加速（远高于Gauss-Seidel的512²）
-    \item \textbf{加速比有限}：即使在32M规模、20线程，最佳加速比仅2.65×（并行效率13\%）
-\end{itemize}
+本节以三对角方程组的并行求解为研究对象，揭示了具有长串行依赖链的算法在并行化过程中面临的极端困难：
+Thomas算法中存在的$O(n)$级串行依赖链，需借助复杂的递归策略才能实现并行化；
+该类算法并行化存在极高的规模阈值，需满足$n \geq 1\text{M}$才能获得有效加速效果，
+这一阈值远高于Gauss-Seidel算法所需的$512^2$规模；即便在32M规模、20线程的配置下，
+该算法能达到的最佳加速比也仅为2.65倍，对应的并行效率仅13\%。
 
 \textbf{为什么并行效率这么低？}
+以4M规模的问题、RecursiveDoubling算法、16线程（该配置下达到最佳加速比2.03倍）为例进行时间分解分析：
+理论最优执行时间为$46.98\text{ms} / 16 = 2.94\text{ms}$（理想无开销场景）；
+实际实测的执行时间为23.11ms；由此计算出并行损失为$23.11 - 2.94 = 20.17\text{ms}$，
+这部分损失占总实际执行时间的87\%。
 
-以4M问题、RecursiveDoubling、16线程为例（最佳配置，加速比2.03×）：
-
-\textbf{时间分解分析：}
-
-\begin{itemize}
-    \item \textbf{理论最优时间}：46.98ms / 16 = 2.94ms（理想情况）
-    \item \textbf{实际执行时间}：23.11ms（实测值）
-    \item \textbf{并行损失}：23.11 - 2.94 = 20.17ms（\textbf{占比87\%}）
-\end{itemize}
-
-\textbf{并行损失细分（推测）：}
-
+对该并行损失的构成可做如下推测：
 \begin{enumerate}
-    \item \textbf{算法本身开销（最大瓶颈）}：$\sim$40\%
-    \begin{itemize}
-        \item RecursiveDoubling单线程：117.72ms
-        \item Sequential单线程：46.98ms
-        \item 额外计算：117.72 - 46.98 = 70.74ms（2.5×慢）
-        \item 分摊到16线程：70.74 / 16 = 4.42ms
-    \end{itemize}
-    
-    \item \textbf{内存访问模式灾难（次要瓶颈）}：$\sim$35\%
-    \begin{itemize}
-        \item Sequential：顺序访问，缓存命中率>95\%
-        \item RecursiveDoubling：跳跃访问（stride=$2^k$），缓存命中率<50\%
-        \item 估计额外开销：$\sim$8ms
-    \end{itemize}
-    
-    \item \textbf{对数级同步开销}：$\sim$10\%
-    \begin{itemize}
-        \item 同步次数：$\log_2(4M) \approx 22$次
-        \item 每次barrier：$\sim$0.02ms
-        \item 总计：22 × 0.02 ≈ 0.44ms（相对较小）
-    \end{itemize}
-    
-    \item \textbf{线程创建与调度}：$\sim$5\%
-    \item \textbf{负载不均衡与其他}：$\sim$10\%
+    \item \textbf{算法本身开销（最大瓶颈）}：约占并行损失的40\%。RecursiveDoubling算法在单线程下的执行时间为117.72ms，而串行的Sequential算法单线程执行时间仅为46.98ms，二者差值70.74ms即为RecursiveDoubling算法的额外计算量（相当于单线程下比Sequential慢2.5倍）；将这部分额外计算量分摊到16线程后，仍产生$70.74 / 16 = 4.42\text{ms}$的开销。
+    \item \textbf{内存访问模式灾难（次要瓶颈）}：约占并行损失的35\%。Sequential算法采用顺序内存访问模式，缓存命中率超过95\%；而RecursiveDoubling算法呈现跳跃式内存访问特征（访问步长为$2^k$），导致缓存命中率不足50\%，由此带来的额外开销约为8ms。
+    \item \textbf{对数级同步开销}：约占并行损失的10\%。该场景下同步次数为$\log_2(4\text{M}) \approx 22$次，单次barrier同步开销约0.02ms，总计同步开销约为$22 \times 0.02 \approx 0.44\text{ms}$，这部分开销相对较小。
+    \item \textbf{线程创建与调度}：约占并行损失的5\%。
+    \item \textbf{负载不均衡与其他因素}：约占并行损失的10\%。
 \end{enumerate}
 
-\textbf{与Gauss-Seidel的对比：}
+将三对角方程组并行求解与Gauss-Seidel算法并行化对比可知：Gauss-Seidel算法并行化的主要瓶颈为小规模场景下占比90\%以上的同步开销，或大规模场景下的内存带宽限制；而三对角方程组求解并行化的核心瓶颈则是占比40\%的算法本身开销与占比35\%的内存访问模式问题。二者的关键差异在于，三对角求解的串行算法本身已具备极优的$O(n)$时间复杂度，运行效率极高，因此打破其串行依赖链所需付出的代价相对巨大。
 
-\begin{itemize}
-    \item \textbf{Gauss-Seidel主要瓶颈}：同步开销（小规模90\%+）或内存带宽（大规模）
-    \item \textbf{三对角求解主要瓶颈}：算法本身开销（40\%）+ 内存访问模式（35\%）
-    \item \textbf{关键差异}：三对角的算法本身太快（$O(n)$），打破依赖链的代价相对巨大
-\end{itemize}
+这一结果充分说明：\textbf{不是所有算法都适合并行化}，当串行算法本身已达到极优的$O(n)$复杂度时，对其进行并行化改造的收益往往极其有限。
 
-这充分说明：\textbf{不是所有算法都适合并行化}，当串行算法已经极优（$O(n)$复杂度）时，并行化的收益极其有限。
 
 %% ========================================
 %% 第四章：并行算法性能总结与展望
 %% ========================================
 \section{并行算法性能总结与展望}
 
-本文深入分析了三类典型计算密集型算法的并行实现与性能特征：神经网络算子（卷积、平均池化）、红黑Gauss-Seidel迭代法和三对角方程求解。通过详尽的实测数据与理论分析，揭示了并行计算在不同应用场景下的性能规律、瓶颈本质和实用价值。
-
-\subsection{三个算法的横向对比}
-
-\subsubsection{算法特征对比}
-
-表\ref{tab:algorithm_comparison}展示了三类算法在多个维度上的对比特征：
-
-\begin{table}[htbp]
-\centering
-\caption{三类算法特征对比}
-\label{tab:algorithm_comparison}
-\begin{tabular}{lp{3cm}p{3cm}p{3cm}}
-\hline
-维度 & 神经网络算子 & Gauss-Seidel & 三对角求解 \\
-\hline
-问题类型 & CNN算子 & 偏微分方程 & 线性方程组 \\
-计算复杂度 & $O(n^2)$ & $O(n^2k)$ & $O(n)$ \\
-数据依赖 & 无依赖 & 弱依赖（红黑分割） & 强依赖（已打破） \\
-内存访问 & 规则（滑动窗口） & 规则（红黑交替） & 跳跃（递归倍增） \\
-并行可行性 & 天然并行 & 可并行（红黑） & 需特殊算法 \\
-并行临界规模 & $100\times100$ & 2D: $512^2$ \newline 3D: $128^3$ & 1M \\
-最佳加速比 & 7.8× @ 20线程 & 2D: 4.56× @ 10线程 \newline 3D: 5.03× @ 8线程 & 1.76× @ 16线程 \\
-最佳并行效率 & 39\% & 2D: 45.6\% \newline 3D: 62.9\% & 11.0\% \\
-主要瓶颈 & 访存带宽 & 小规模：同步开销 \newline 大规模：访存带宽 & 内存访问模式 \\
-实用价值 & 高 & 高 & 有限 \\
-\hline
-\end{tabular}
-\end{table}
-
-\subsubsection{性能随规模变化趋势}
-
-表\ref{tab:scale_comparison}展示了10线程配置下，三类算法的加速比随问题规模的变化趋势：
-
-\begin{table}[htbp]
-\centering
-\caption{加速比vs问题规模对比（10线程）}
-\label{tab:scale_comparison}
-\begin{tabular}{lrrr}
-\hline
-规模（相当元素数） & 池化算子 & Gauss-Seidel 2D & 三对角求解 \\
-\hline
-1万 & 2.0× & 0.5× & 0.16× \\
-10万 & 5.5× & 2.5× & 0.51× \\
-100万 & 7.2× & 4.2× & \textbf{1.15×} \\
-1000万 & 7.8× & 4.5× & \textbf{1.60×} \\
-\hline
-\end{tabular}
-\end{table}
-
-\textbf{观察：}池化算子性能曲线最平滑，小规模就有效；Gauss-Seidel在中等规模达到最佳；三对角求解需要极大规模才有效，且效果有限。
-
-\subsubsection{并行门槛对比}
-
-表\ref{tab:threshold_comparison}量化了三类算法达到有效并行的临界规模及其原因：
-
-\begin{table}[htbp]
-\centering
-\caption{并行门槛对比}
-\label{tab:threshold_comparison}
-\begin{tabular}{lrrrr}
-\hline
-算法 & 临界规模 & 串行时间(ms) & 并行开销(ms) & 开销/计算比 \\
-\hline
-池化算子 & $100\times100$ & 0.1 & $\sim$1 & 10:1 \\
-Gauss-Seidel 2D & $512\times512$ & 5 & $\sim$50 & 10:1 \\
-\textbf{三对角求解} & \textbf{1M} & \textbf{0.23} & \textbf{$\sim$20} & \textbf{100:1} \\
-\hline
-\end{tabular}
-\end{table}
-
-\textbf{关键发现：}三对角求解的并行门槛是其他算法的10倍！原因在于算法本身太快（线性复杂度），并行开销相对巨大。
-
-% TODO: 添加图表：三条曲线对比加速比vs规模
-
+本文深入分析了三类典型计算密集型算法的并行实现与性能特征：神经网络算子（卷积、平均池化）、
+红黑Gauss-Seidel迭代法和三对角方程求解。通过详尽的实测数据与理论分析，
+揭示了并行计算在不同应用场景下的性能规律、瓶颈本质和实用价值。
 \subsection{并行性能规律总结}
 
 \subsubsection{规模效应的普遍性}
@@ -1590,7 +1268,7 @@ Gauss-Seidel & $O(n^2k)$ & $\sim$100 & 高 \\
 \item Tiling+并行10线程：4.56×加速
 \end{itemize}
 
-\textbf{Tiling缓存优化带来的提升，超过了普通并行！}这说明现代处理器的性能瓶颈主要在内存访问而非计算能力。
+\textbf{Tiling缓存优化带来的提升，超过了普通并行}这说明现代处理器的性能瓶颈主要在内存访问而非计算能力。
 
 % TODO: 添加图表：访存优化效果对比柱状图
 
@@ -1598,7 +1276,7 @@ Gauss-Seidel & $O(n^2k)$ & $\sim$100 & 高 \\
 
 \subsubsection{本研究的局限性}
 
-\textbf{1. 测试环境单一：}仅在AMD Ryzen 9 5950X（16核32线程）上测试，未覆盖Intel平台、ARM服务器、移动处理器等。不同架构的缓存层次、内存带宽、SIMD宽度差异可能导致不同结果。
+\textbf{1. 测试环境单一：}仅在AMD AI 9 H 365（10核20线程）上测试，未覆盖Intel平台、ARM服务器、移动处理器等。不同架构的缓存层次、内存带宽、SIMD宽度差异可能导致不同结果。
 
 \textbf{2. 算法代表性有限：}仅分析了三类算法，未涵盖图算法、排序算法、动态规划等其他重要并行模式。
 
@@ -1659,41 +1337,12 @@ Gauss-Seidel & 5.0× & \textbf{20-30×} & 红黑同步 \\
 
 \textbf{结论：}4-8线程可能是能效比最佳点。
 
-\textbf{方向5：自动并行编译器}
-
-理想情况下，编译器应自动完成并行优化。现状是OpenMP需要手动插入pragma，自动向量化效果有限（20-30\%提升），无法自动做Tiling、内存对齐。未来可能：AI驱动的编译器（学习最优并行策略）、自动Tiling和缓存优化、硬件感知的自适应编译。
-
-\subsubsection{实践建议总结}
-
-\textbf{对于研究人员：}
-\begin{enumerate}
-\item 建立并行性能预测模型（考虑缓存、NUMA、通信）
-\item 更多算法的并行模式分类（天然并行、弱依赖、强依赖）
-\item GPU vs CPU并行的决策模型
-\end{enumerate}
-
-\textbf{对于工程师：}
-\begin{enumerate}
-\item \textbf{优先优化访存模式，再考虑并行}（Tiling $>$ 并行）
-\item \textbf{8-10线程是性价比最高的配置}（多数场景）
-\item \textbf{小规模问题不要并行}（$n <$ 临界规模）
-\item 使用性能分析工具确认瓶颈（不要盲目优化）
-\end{enumerate}
-
-\textbf{对于学生：}
-\begin{enumerate}
-\item 并行编程$\neq$简单的\texttt{\#pragma omp parallel for}
-\item 理论加速比与实际差距巨大（Amdahl定律只是起点）
-\item 内存系统是现代并行性能的关键
-\item 工程实践比理论算法更重要
-\end{enumerate}
-
 \subsection{全文总结}
 
 本文通过对三类典型算法的深入分析，揭示了并行计算的\textbf{真实面貌}：
 
 \begin{enumerate}
-\item \textbf{并行不是银弹：}平均并行效率仅40\%，60\%资源浪费在开销上
+\item \textbf{并行不是Silver Bullet：}平均并行效率仅40\%，60\%资源浪费在开销上
 \item \textbf{访存比计算更重要：}Tiling优化（3×加速）$>$ 普通并行（2-3×加速）
 \item \textbf{规模决定一切：}小规模问题（$<$10万元素）几乎不应并行
 \item \textbf{算法特性差异巨大：}线性算法（三对角）并行价值极低，二次算法（Gauss-Seidel）并行效果好
@@ -1703,7 +1352,7 @@ Gauss-Seidel & 5.0× & \textbf{20-30×} & 红黑同步 \\
 \textbf{最重要的启示：}在并行化之前，先问自己：(1)问题是否足够大？(2)算法是否足够慢？(3)访存是否已优化？如果三个问题的答案不全是"是"，\textbf{不要并行}。
 
 并行计算是一门\textbf{工程艺术}，需要在理论、硬件和实践之间找到平衡。理解这些规律，才能在实际应用中做出明智的决策。
-
+\clearpage
 %% ========================================
 %% 附录
 %% ========================================
@@ -1712,13 +1361,13 @@ Gauss-Seidel & 5.0× & \textbf{20-30×} & 红黑同步 \\
 \section{详细性能测试数据}
 \label{appendix:data}
 
-本附录提供各算法的完整性能测试数据，包括所有规模、线程数配置的详细结果。所有数据均来自markdown文件中经过确认的测试结果。
+本附录提供各算法的完整性能测试数据，包括所有规模、线程数配置的详细结果。
 
 \subsection{神经网络算子性能数据}
 
 \subsubsection{卷积算子并行位置对比}
-
-表\ref{tab:conv_channel_parallel}展示了在output\_channel维度并行的完整性能数据（输入$150\times150\times3$，输出$32\times150\times150$，卷积核$5\times5$）：
+输入$150\times150\times3$，输出$32\times150\times150$，卷积核$5\times5$\\
+表\ref{tab:conv_channel_parallel}展示了在output\_channel维度并行的完整性能数据：
 
 \begin{table}[!htbp]
 \centering
@@ -1780,20 +1429,20 @@ Serial & 1 & 15.84 & 1.00 & 100.0 & 1.00× & - \\
 \multicolumn{7}{c}{\textbf{通道并行（Channel Parallel）}} \\
 \hline
 ChannelParallel & 2 & 8.92 & 1.78 & 89.0 & 1.78× & +77\% \\
-ChannelParallel & 4 & 4.82 & 3.29 & 82.2 & 3.29× & +229\% \\
-ChannelParallel & 8 & 3.54 & 4.47 & 55.9 & 4.47× & +347\% \\
-ChannelParallel & 10 & 3.58 & 4.42 & 44.2 & 4.42× & +342\% \\
-ChannelParallel & 16 & 3.76 & 4.21 & 26.3 & 4.21× & +321\% \\
-ChannelParallel & 20 & 3.95 & 4.01 & 20.0 & 4.01× & +301\% \\
+ & 4 & 4.82 & 3.29 & 82.2 & 3.29× & +229\% \\
+ & 8 & 3.54 & 4.47 & 55.9 & 4.47× & +347\% \\
+ & 10 & 3.58 & 4.42 & 44.2 & 4.42× & +342\% \\
+ & 16 & 3.76 & 4.21 & 26.3 & 4.21× & +321\% \\
+ & 20 & 3.95 & 4.01 & 20.0 & 4.01× & +301\% \\
 \hline
 \multicolumn{7}{c}{\textbf{空间并行（Collapse(2)）}} \\
 \hline
 SpaceParallel & 2 & 8.31 & 1.91 & 95.5 & 1.91× & +91\% \\
-SpaceParallel & 4 & 4.56 & 3.47 & 86.8 & 3.47× & +247\% \\
-SpaceParallel & 8 & 2.68 & 5.91 & 73.9 & 5.91× & \textbf{+491\%} \\
-SpaceParallel & 10 & 2.36 & 6.71 & 67.1 & 6.71× & \textbf{+571\%} \\
-SpaceParallel & 16 & 2.43 & 6.52 & 40.7 & 6.52× & +552\% \\
-SpaceParallel & 20 & 2.48 & 6.39 & 31.9 & 6.39× & +539\% \\
+ & 4 & 4.56 & 3.47 & 86.8 & 3.47× & +247\% \\
+ & 8 & 2.68 & 5.91 & 73.9 & 5.91× & \textbf{+491\%} \\
+ & 10 & 2.36 & 6.71 & 67.1 & 6.71× & \textbf{+571\%} \\
+ & 16 & 2.43 & 6.52 & 40.7 & 6.52× & +552\% \\
+ & 20 & 2.48 & 6.39 & 31.9 & 6.39× & +539\% \\
 \hline
 \end{tabular}
 \end{table}
@@ -1939,7 +1588,7 @@ MemoryOpt & 20 & 28.5 & 7.13 & 7.13× & 132.0 \\
 \hline
 规模 & 线程 & 方法 & 时间(ms) & 误差 & 加速比 \\
 \hline
-\multicolumn{6}{c}{\textbf{128³（中等规模）}} \\
+\multicolumn{6}{c}{\textbf{$128^3$（中等规模）}} \\
 \hline
 128 & 1 & Original & 265.43 & 8.92e-02 & 1.00 \\
 128 & 1 & Tiled & 238.76 & 8.92e-02 & 1.11 \\
@@ -1954,7 +1603,7 @@ MemoryOpt & 20 & 28.5 & 7.13 & 7.13× & 132.0 \\
 128 & 10 & Tiled & 58.43 & 8.92e-02 & 4.54 \\
 128 & 10 & Tiled+Aligned & 49.82 & 8.92e-02 & \textbf{5.33} \\
 \hline
-\multicolumn{6}{c}{\textbf{256³（大规模，最佳并行效率）}} \\
+\multicolumn{6}{c}{\textbf{$256^3$（大规模，最佳并行效率）}} \\
 \hline
 256 & 1 & Original & 2156.34 & 5.43e-02 & 1.00 \\
 256 & 1 & Tiled & 1987.52 & 5.43e-02 & 1.08 \\
@@ -2123,7 +1772,7 @@ MemoryOpt & 20 & 28.5 & 7.13 & 7.13× & 132.0 \\
 \begin{itemize}
 \item 七点模板离散化
 \item 三维红黑棋盘划分：$(i+j+k)\%2$
-\item 三层Tiling：L1(16³) + L2(32³) + L3(64³)
+\item 三层Tiling：L1($16^3$) + L2($32^3$) + L3($64^3$)
 \end{itemize}
 
 \subsection{三对角方程组求解实现}
@@ -2222,7 +1871,7 @@ foreach ($size in $sizes) {
 \label{appendix:environment}
 
 \subsection{硬件配置}
-
+\comment{要修改}
 \begin{table}[!htbp]
 \centering
 \caption{测试平台硬件配置}
@@ -2297,9 +1946,9 @@ OpenMP & 4.5 \\
 %% ========================================
 \section{写在最后}
 \subsection{发布地址}
+本项目的完整代码和文档均已开源，欢迎访问Github仓库获取最新版本：
 \begin{itemize}
-    \item Github: \url{https://github.com/Jiazhen-Lei/SJTU_Course_Template_Latex}
-    \item Overleaf:  \url{https://www.overleaf.com/latex/}
+    \item Github: \url{https://github.com/watney1024/iteration_final_project}
 \end{itemize}
 
 %%----------- 参考文献 -------------------%%
