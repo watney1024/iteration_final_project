@@ -1,0 +1,16 @@
+﻿Program,Threads,Time(ms),Speedup
+Sequential,1,127.55,1.00
+Brugnano,1,209.16,0.61
+Brugnano,2,130.61,0.98
+Brugnano,4,72.18,1.77
+Brugnano,8,53.56,2.38
+Brugnano,10,51.4,2.48
+Brugnano,16,53.57,2.38
+Brugnano,20,51.75,2.46
+RecursiveDoubling,1,327.87,0.39
+RecursiveDoubling,2,178.36,0.72
+RecursiveDoubling,4,101.72,1.25
+RecursiveDoubling,8,67.77,1.88
+RecursiveDoubling,10,57.4,2.22
+RecursiveDoubling,16,48.1,2.65
+RecursiveDoubling,20,43.88,2.91

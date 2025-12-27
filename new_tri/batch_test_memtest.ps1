@@ -46,11 +46,15 @@ try {
 
 # 定义测试数据规模
 $dataSizes = @(
-    @{Name="8k"; Size=8192},
-    @{Name="16k"; Size=16384},
-    @{Name="128k"; Size=131072},
+    # @{Name="8k"; Size=8192},
+    # @{Name="16k"; Size=16384},
+    # @{Name="128k"; Size=131072},
     @{Name="1M"; Size=1048576},
-    @{Name="4M"; Size=4194304}
+    @{Name="2M"; Size=2097152},
+    @{Name="4M"; Size=4194304},
+    @{Name="8M"; Size=8388608},
+    @{Name="16M"; Size=16777216},
+    @{Name="32M"; Size=33554432}
 )
 
 # 定义线程数配置（不包括串行）
