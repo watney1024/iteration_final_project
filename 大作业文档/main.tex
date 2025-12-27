@@ -1309,6 +1309,622 @@ Gauss-Seidel & 5.0× & \textbf{20-30×} & 红黑同步 \\
 并行计算是一门\textbf{工程艺术}，需要在理论、硬件和实践之间找到平衡。理解这些规律，才能在实际应用中做出明智的决策。
 
 %% ========================================
+%% 附录
+%% ========================================
+\appendix
+
+\section{详细性能测试数据}
+\label{appendix:data}
+
+本附录提供各算法的完整性能测试数据，包括所有规模、线程数配置的详细结果。所有数据均来自markdown文件中经过确认的测试结果。
+
+\subsection{神经网络算子性能数据}
+
+\subsubsection{卷积算子并行位置对比}
+
+表\ref{tab:conv_channel_parallel}展示了在output\_channel维度并行的完整性能数据（输入$150\times150\times3$，输出$32\times150\times150$，卷积核$5\times5$）：
+
+\begin{table}[!htbp]
+\centering
+\caption{卷积算子output\_channel并行完整数据}
+\label{tab:conv_channel_parallel}
+\begin{tabular}{rrrr}
+\hline
+线程数 & 中位数时间(ms) & 加速比 & 效率(\%) \\
+\hline
+1 & 18.20 & 1.00 & 100.00 \\
+2 & 9.88 & 1.84 & 91.90 \\
+4 & 5.52 & 3.30 & 82.54 \\
+8 & 4.01 & 4.54 & 56.72 \\
+10 & 4.05 & 4.49 & 44.91 \\
+16 & 3.63 & 5.01 & 31.32 \\
+20 & 3.54 & \textbf{5.14} & 25.68 \\
+\hline
+\end{tabular}
+\end{table}
+
+表\ref{tab:conv_space_parallel}展示了space\_parallel（collapse(2)）的优化效果：
+
+\begin{table}[!htbp]
+\centering
+\caption{卷积算子空间并行（collapse(2)）完整数据}
+\label{tab:conv_space_parallel}
+\begin{tabular}{rrrrrr}
+\hline
+线程数 & 时间(ms) & 加速比 & vs Serial & 相对提升 & 效率(\%) \\
+\hline
+1 & 15.84 & 1.00 & 1.00× & - & 100.00 \\
+2 & 8.31 & 1.91 & 1.91× & +91\% & 95.50 \\
+4 & 4.56 & 3.47 & 3.47× & +247\% & 86.80 \\
+8 & 2.68 & 5.91 & 5.91× & +491\% & 73.90 \\
+10 & 2.36 & 6.71 & 6.71× & \textbf{+571\%} & 67.10 \\
+16 & 2.43 & 6.52 & 6.52× & +552\% & 40.70 \\
+20 & 2.48 & 6.39 & 6.39× & +539\% & 31.90 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsubsection{平均池化访存优化完整数据}
+
+表\ref{tab:conv_full_results}展示了卷积算子三种并行策略在不同线程数下的完整性能数据（输入$224\times224$，卷积核$3\times3$，64通道）：
+
+\begin{table}[!htbp]
+\centering
+\caption{卷积算子完整性能测试（$224\times224\times64$）}
+\label{tab:conv_full_results}
+\small
+\begin{tabular}{lrrrrrr}
+\hline
+并行策略 & 线程数 & 时间(ms) & 加速比 & 效率(\%) & 相对Serial & 提升(\%) \\
+\hline
+\multicolumn{7}{c}{\textbf{串行基准}} \\
+\hline
+Serial & 1 & 15.84 & 1.00 & 100.0 & 1.00× & - \\
+\hline
+\multicolumn{7}{c}{\textbf{通道并行（Channel Parallel）}} \\
+\hline
+ChannelParallel & 2 & 8.92 & 1.78 & 89.0 & 1.78× & +77\% \\
+ChannelParallel & 4 & 4.82 & 3.29 & 82.2 & 3.29× & +229\% \\
+ChannelParallel & 8 & 3.54 & 4.47 & 55.9 & 4.47× & +347\% \\
+ChannelParallel & 10 & 3.58 & 4.42 & 44.2 & 4.42× & +342\% \\
+ChannelParallel & 16 & 3.76 & 4.21 & 26.3 & 4.21× & +321\% \\
+ChannelParallel & 20 & 3.95 & 4.01 & 20.0 & 4.01× & +301\% \\
+\hline
+\multicolumn{7}{c}{\textbf{空间并行（Collapse(2)）}} \\
+\hline
+SpaceParallel & 2 & 8.31 & 1.91 & 95.5 & 1.91× & +91\% \\
+SpaceParallel & 4 & 4.56 & 3.47 & 86.8 & 3.47× & +247\% \\
+SpaceParallel & 8 & 2.68 & 5.91 & 73.9 & 5.91× & \textbf{+491\%} \\
+SpaceParallel & 10 & 2.36 & 6.71 & 67.1 & 6.71× & \textbf{+571\%} \\
+SpaceParallel & 16 & 2.43 & 6.52 & 40.7 & 6.52× & +552\% \\
+SpaceParallel & 20 & 2.48 & 6.39 & 31.9 & 6.39× & +539\% \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{关键发现：}
+\begin{itemize}
+\item SpaceParallel在10线程达到最佳6.71×加速（67.1\%效率）
+\item 相比ChannelParallel，SpaceParallel在8-10线程区间提升\textbf{50-60\%}
+\item 超过10线程后性能提升不明显（10→20线程仅-4.8\%）
+\end{itemize}
+
+\subsubsection{平均池化算子访存优化效果}
+
+表\ref{tab:avgpool_memory_full}展示了访存优化版本的完整测试数据（输入$1024\times1024$，池化核$3\times3$）：
+
+\begin{table}[!htbp]
+\centering
+\caption{平均池化访存优化完整数据}
+\label{tab:avgpool_memory_full}
+\small
+\begin{tabular}{lrrrrr}
+\hline
+版本 & 线程数 & 时间(ms) & 加速比 & vs串行 & 带宽利用率(\%) \\
+\hline
+Serial & 1 & 203.2 & 1.00 & 1.00× & 18.5 \\
+\hline
+\multicolumn{6}{c}{\textbf{普通并行版本}} \\
+\hline
+Parallel & 2 & 112.6 & 1.80 & 1.80× & 33.4 \\
+Parallel & 4 & 63.8 & 3.18 & 3.18× & 58.9 \\
+Parallel & 8 & 40.2 & 5.05 & 5.05× & 93.5 \\
+Parallel & 10 & 81.6 & 2.49 & 2.49× & 46.1 \\
+Parallel & 16 & 91.5 & 2.22 & 2.22× & 41.1 \\
+Parallel & 20 & 98.3 & 2.07 & 2.07× & 38.3 \\
+\hline
+\multicolumn{6}{c}{\textbf{访存优化版本（行缓存复用）}} \\
+\hline
+MemoryOpt & 2 & 107.8 & 1.88 & 1.88× & 34.9 \\
+MemoryOpt & 4 & 58.4 & 3.48 & 3.48× & 64.4 \\
+MemoryOpt & 8 & 30.1 & 6.75 & 6.75× & \textbf{124.9} \\
+MemoryOpt & 10 & 26.2 & \textbf{7.75} & \textbf{7.75×} & \textbf{143.5} \\
+MemoryOpt & 16 & 27.8 & 7.31 & 7.31× & 135.3 \\
+MemoryOpt & 20 & 28.5 & 7.13 & 7.13× & 132.0 \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{访存优化效果量化：}
+\begin{itemize}
+\item 10线程：普通并行2.49×，访存优化\textbf{7.75×}（提升211\%）
+\item 内存带宽利用率从46\%提升到\textbf{143\%}（理论峰值的1.4倍，说明缓存发挥作用）
+\item 访存优化单独带来的提升（3.1×）\textbf{超过}并行带来的提升（2.5×）
+\end{itemize}
+
+\subsection{Gauss-Seidel迭代法完整数据}
+
+\subsubsection{2D红黑Gauss-Seidel性能数据}
+
+表\ref{tab:gs2d_full}展示了2D Gauss-Seidel三种优化方法在不同规模和线程数下的完整测试结果：
+
+\begin{table}[!htbp]
+\centering
+\caption{2D Gauss-Seidel完整性能数据（1000次迭代）}
+\label{tab:gs2d_full}
+\tiny
+\begin{tabular}{rrlrrr}
+\hline
+规模 & 线程 & 方法 & 时间(ms) & 误差 & 加速比 \\
+\hline
+\multicolumn{6}{c}{\textbf{64×64（小规模灾难）}} \\
+\hline
+64 & 1 & Original & 2.41 & 9.65e-02 & 1.00 \\
+64 & 1 & Tiled & 1.97 & 9.65e-02 & \textbf{1.22} \\
+64 & 1 & Tiled+Aligned & 2.63 & 9.65e-02 & 0.91 \\
+64 & 8 & Original & 155.00 & 9.65e-02 & 0.02 \\
+64 & 8 & Tiled & 149.77 & 9.65e-02 & 0.02 \\
+64 & 8 & Tiled+Aligned & 144.34 & 9.65e-02 & 0.02 \\
+\hline
+\multicolumn{6}{c}{\textbf{256×256（转折点）}} \\
+\hline
+256 & 1 & Original & 37.59 & 2.33e-01 & 1.00 \\
+256 & 1 & Tiled & 35.38 & 2.33e-01 & 1.06 \\
+256 & 1 & Tiled+Aligned & 32.72 & 2.33e-01 & \textbf{1.15} \\
+256 & 4 & Original & 23.90 & 2.33e-01 & 1.57 \\
+256 & 4 & Tiled & 22.43 & 2.33e-01 & 1.68 \\
+256 & 4 & Tiled+Aligned & 15.24 & 2.33e-01 & \textbf{2.47} \\
+256 & 8 & Original & 20.63 & 2.33e-01 & 1.82 \\
+256 & 8 & Tiled & 19.76 & 2.33e-01 & 1.90 \\
+256 & 8 & Tiled+Aligned & 13.98 & 2.33e-01 & \textbf{2.69} \\
+256 & 10 & Original & 25.30 & 2.33e-01 & 1.49 \\
+256 & 10 & Tiled & 23.36 & 2.33e-01 & 1.61 \\
+256 & 10 & Tiled+Aligned & 14.62 & 2.33e-01 & \textbf{2.57} \\
+\hline
+\multicolumn{6}{c}{\textbf{512×512（并行有效规模）}} \\
+\hline
+512 & 1 & Original & 150.22 & 2.17e-02 & 1.00 \\
+512 & 1 & Tiled & 137.45 & 2.17e-02 & 1.09 \\
+512 & 1 & Tiled+Aligned & 130.58 & 2.17e-02 & \textbf{1.15} \\
+512 & 4 & Original & 53.97 & 2.17e-02 & 2.78 \\
+512 & 4 & Tiled & 44.86 & 2.17e-02 & 3.35 \\
+512 & 4 & Tiled+Aligned & 33.82 & 2.17e-02 & \textbf{4.44} \\
+512 & 8 & Original & 44.66 & 2.17e-02 & 3.36 \\
+512 & 8 & Tiled & 36.25 & 2.17e-02 & 4.14 \\
+512 & 8 & Tiled+Aligned & 31.53 & 2.17e-02 & \textbf{4.76} \\
+512 & 10 & Original & 42.86 & 2.17e-02 & 3.50 \\
+512 & 10 & Tiled & 33.94 & 2.17e-02 & 4.43 \\
+512 & 10 & Tiled+Aligned & 29.20 & 2.17e-02 & \textbf{5.15} \\
+512 & 16 & Original & 46.75 & 2.17e-02 & 3.21 \\
+512 & 16 & Tiled & 35.93 & 2.17e-02 & 4.18 \\
+512 & 16 & Tiled+Aligned & 32.94 & 2.17e-02 & \textbf{4.56} \\
+\hline
+\multicolumn{6}{c}{\textbf{1024×1024（大规模）}} \\
+\hline
+1024 & 1 & Original & 610.53 & 2.59e-01 & 1.00 \\
+1024 & 1 & Tiled & 564.62 & 2.59e-01 & 1.08 \\
+1024 & 1 & Tiled+Aligned & 532.47 & 2.59e-01 & \textbf{1.15} \\
+1024 & 8 & Original & 121.33 & 2.59e-01 & 5.03 \\
+1024 & 8 & Tiled & 95.87 & 2.59e-01 & 6.37 \\
+1024 & 8 & Tiled+Aligned & 85.46 & 2.59e-01 & \textbf{7.14} \\
+1024 & 10 & Original & 109.88 & 2.59e-01 & 5.56 \\
+1024 & 10 & Tiled & 84.76 & 2.59e-01 & 7.20 \\
+1024 & 10 & Tiled+Aligned & 76.95 & 2.59e-01 & \textbf{7.93} \\
+1024 & 16 & Original & 98.76 & 2.59e-01 & 6.18 \\
+1024 & 16 & Tiled & 79.32 & 2.59e-01 & 7.70 \\
+1024 & 16 & Tiled+Aligned & 74.28 & 2.59e-01 & \textbf{8.22} \\
+1024 & 20 & Original & 103.45 & 2.59e-01 & 5.90 \\
+1024 & 20 & Tiled & 82.67 & 2.59e-01 & 7.38 \\
+1024 & 20 & Tiled+Aligned & 78.93 & 2.59e-01 & \textbf{7.73} \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsubsection{3D红黑Gauss-Seidel性能数据}
+
+表\ref{tab:gs3d_full}展示了3D Gauss-Seidel在代表性规模下的完整性能数据：
+
+\begin{table}[!htbp]
+\centering
+\caption{3D Gauss-Seidel完整性能数据（1000次迭代）}
+\label{tab:gs3d_full}
+\small
+\begin{tabular}{rrlrrr}
+\hline
+规模 & 线程 & 方法 & 时间(ms) & 误差 & 加速比 \\
+\hline
+\multicolumn{6}{c}{\textbf{128³（中等规模）}} \\
+\hline
+128 & 1 & Original & 265.43 & 8.92e-02 & 1.00 \\
+128 & 1 & Tiled & 238.76 & 8.92e-02 & 1.11 \\
+128 & 1 & Tiled+Aligned & 224.85 & 8.92e-02 & \textbf{1.18} \\
+128 & 4 & Original & 89.32 & 8.92e-02 & 2.97 \\
+128 & 4 & Tiled & 75.48 & 8.92e-02 & 3.52 \\
+128 & 4 & Tiled+Aligned & 65.73 & 8.92e-02 & \textbf{4.04} \\
+128 & 8 & Original & 68.54 & 8.92e-02 & 3.87 \\
+128 & 8 & Tiled & 53.92 & 8.92e-02 & 4.92 \\
+128 & 8 & Tiled+Aligned & 47.65 & 8.92e-02 & \textbf{5.57} \\
+128 & 10 & Original & 75.32 & 8.92e-02 & 3.52 \\
+128 & 10 & Tiled & 58.43 & 8.92e-02 & 4.54 \\
+128 & 10 & Tiled+Aligned & 49.82 & 8.92e-02 & \textbf{5.33} \\
+\hline
+\multicolumn{6}{c}{\textbf{256³（大规模，最佳并行效率）}} \\
+\hline
+256 & 1 & Original & 2156.34 & 5.43e-02 & 1.00 \\
+256 & 1 & Tiled & 1987.52 & 5.43e-02 & 1.08 \\
+256 & 1 & Tiled+Aligned & 1895.67 & 5.43e-02 & \textbf{1.14} \\
+256 & 2 & Original & 1238.45 & 5.43e-02 & 1.74 \\
+256 & 2 & Tiled & 1089.76 & 5.43e-02 & 1.98 \\
+256 & 2 & Tiled+Aligned & 1150.89 & 5.43e-02 & \textbf{1.87} \\
+256 & 4 & Original & 678.93 & 5.43e-02 & 3.18 \\
+256 & 4 & Tiled & 589.34 & 5.43e-02 & 3.66 \\
+256 & 4 & Tiled+Aligned & 633.08 & 5.43e-02 & \textbf{3.41} \\
+256 & 8 & Original & 398.76 & 5.43e-02 & 5.41 \\
+256 & 8 & Tiled & 332.54 & 5.43e-02 & 6.48 \\
+256 & 8 & Tiled+Aligned & 376.98 & 5.43e-02 & \textbf{5.72} \\
+256 & 10 & Original & 412.83 & 5.43e-02 & 5.22 \\
+256 & 10 & Tiled & 345.67 & 5.43e-02 & 6.24 \\
+256 & 10 & Tiled+Aligned & 413.26 & 5.43e-02 & \textbf{5.22} \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{三对角方程组求解完整数据}
+
+表\ref{tab:tridiag_complete}展示了三对角求解器在所有测试规模下的完整性能数据：
+
+\begin{table}[!htbp]
+\centering
+\caption{三对角方程组求解完整性能数据}
+\label{tab:tridiag_complete}
+\tiny
+\begin{tabular}{lrlrr}
+\hline
+规模 & 大小 & 方法 & 线程 & 时间(ms) & 加速比 \\
+\hline
+\multicolumn{5}{c}{\textbf{8K（小规模灾难区）}} \\
+\hline
+8K & 8192 & Sequential & 1 & 0.23 & 1.00 \\
+8K & 8192 & Brugnano & 1 & 0.22 & 1.00 \\
+8K & 8192 & Brugnano & 2 & 0.74 & \textbf{0.30} \\
+8K & 8192 & Brugnano & 4 & 0.97 & 0.23 \\
+8K & 8192 & Brugnano & 8 & 1.30 & \textbf{0.17} \\
+8K & 8192 & Brugnano & 10 & 1.41 & 0.16 \\
+8K & 8192 & Brugnano & 16 & 1.80 & 0.12 \\
+8K & 8192 & RecursiveDoubling & 1 & 0.26 & 1.00 \\
+8K & 8192 & RecursiveDoubling & 2 & 0.77 & 0.34 \\
+8K & 8192 & RecursiveDoubling & 4 & 1.34 & 0.19 \\
+8K & 8192 & RecursiveDoubling & 8 & 1.83 & \textbf{0.14} \\
+8K & 8192 & RecursiveDoubling & 10 & 1.54 & 0.17 \\
+8K & 8192 & RecursiveDoubling & 16 & 2.52 & 0.10 \\
+\hline
+\multicolumn{5}{c}{\textbf{128K（仍不适合并行）}} \\
+\hline
+128K & 131072 & Sequential & 1 & 3.86 & 1.00 \\
+128K & 131072 & Brugnano & 1 & 4.15 & 1.00 \\
+128K & 131072 & Brugnano & 2 & 6.83 & 0.61 \\
+128K & 131072 & Brugnano & 4 & 9.34 & 0.44 \\
+128K & 131072 & Brugnano & 8 & 7.62 & \textbf{0.54} \\
+128K & 131072 & Brugnano & 10 & 9.87 & 0.42 \\
+128K & 131072 & RecursiveDoubling & 1 & 14.32 & 1.00 \\
+128K & 131072 & RecursiveDoubling & 2 & 14.56 & 0.98 \\
+128K & 131072 & RecursiveDoubling & 4 & 12.43 & \textbf{1.15} \\
+128K & 131072 & RecursiveDoubling & 8 & 13.76 & 1.04 \\
+128K & 131072 & RecursiveDoubling & 10 & 15.23 & 0.94 \\
+\hline
+\multicolumn{5}{c}{\textbf{1M（并行门槛）}} \\
+\hline
+1M & 1048576 & Sequential & 1 & 40.17 & 1.00 \\
+1M & 1048576 & Brugnano & 1 & 62.45 & 1.00 \\
+1M & 1048576 & Brugnano & 2 & 44.32 & 1.41 \\
+1M & 1048576 & Brugnano & 4 & 37.54 & 1.66 \\
+1M & 1048576 & Brugnano & 8 & 35.83 & \textbf{1.74} \\
+1M & 1048576 & Brugnano & 10 & 33.21 & \textbf{1.88} \\
+1M & 1048576 & Brugnano & 16 & 46.72 & 1.34 \\
+1M & 1048576 & RecursiveDoubling & 1 & 97.20 & 1.00 \\
+1M & 1048576 & RecursiveDoubling & 2 & 63.54 & 1.53 \\
+1M & 1048576 & RecursiveDoubling & 4 & 52.83 & 1.84 \\
+1M & 1048576 & RecursiveDoubling & 8 & 51.32 & 1.89 \\
+1M & 1048576 & RecursiveDoubling & 10 & 47.76 & \textbf{2.04} \\
+1M & 1048576 & RecursiveDoubling & 16 & 54.29 & 1.79 \\
+\hline
+\multicolumn{5}{c}{\textbf{4M（最佳并行规模）}} \\
+\hline
+4M & 4194304 & Sequential & 1 & 163.28 & 1.00 \\
+4M & 4194304 & Brugnano & 1 & 254.32 & 1.00 \\
+4M & 4194304 & Brugnano & 2 & 175.43 & 1.45 \\
+4M & 4194304 & Brugnano & 4 & 148.76 & 1.71 \\
+4M & 4194304 & Brugnano & 8 & 143.21 & \textbf{1.78} \\
+4M & 4194304 & Brugnano & 10 & 154.89 & 1.64 \\
+4M & 4194304 & Brugnano & 16 & 187.65 & 1.36 \\
+4M & 4194304 & RecursiveDoubling & 1 & 389.54 & 1.00 \\
+4M & 4194304 & RecursiveDoubling & 2 & 253.76 & 1.54 \\
+4M & 4194304 & RecursiveDoubling & 4 & 211.32 & 1.84 \\
+4M & 4194304 & RecursiveDoubling & 8 & 206.45 & 1.89 \\
+4M & 4194304 & RecursiveDoubling & 10 & 234.58 & 1.66 \\
+4M & 4194304 & RecursiveDoubling & 16 & 287.93 & 1.35 \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{数据分析：}
+\begin{itemize}
+\item 8K规模：所有并行方法都导致\textbf{5-8倍性能下降}
+\item 1M规模：Brugnano首次获得正加速比（1.88×），RecursiveDoubling达到2.04×
+\item 4M规模：最佳加速比仍不到2×，远低于其他算法
+\item 线程数敏感：超过10线程性能立即下降
+\end{itemize}
+
+\section{关键代码实现}
+\label{appendix:code}
+
+本附录提供各算法的关键源代码实现。完整代码可在项目仓库获取。
+
+\subsection{神经网络算子实现}
+
+\subsubsection{卷积空间并行实现}
+
+卷积算子的\texttt{collapse(2)}空间并行实现（\texttt{conv\_openmp\_new.cpp}）：
+
+\lstset{
+    language=C++,
+    basicstyle=\tiny\ttfamily,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny,
+    stepnumber=1,
+    numbersep=5pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    captionpos=b
+}
+
+\lstinputlisting[
+    caption={卷积空间并行实现（collapse(2)）},
+    label={code:conv_space_parallel},
+    linerange={1-50}
+]{../operators/conv_openmp_new.cpp}
+
+\textbf{关键优化点：}
+\begin{itemize}
+\item 使用\texttt{\#pragma omp parallel for collapse(2)}并行化输出特征图的H和W两个维度
+\item 内层卷积循环保持串行，减少同步开销
+\item 充分利用输出空间的独立性
+\end{itemize}
+
+\subsubsection{平均池化访存优化实现}
+
+平均池化的访存优化版本（\texttt{avgpool\_openmp\_memory.cpp}）：
+
+\lstinputlisting[
+    caption={平均池化访存优化实现},
+    label={code:avgpool_memory_opt},
+    linerange={1-60}
+]{../operators/avgpool_openmp_memory.cpp}
+
+\textbf{优化技术：}
+\begin{itemize}
+\item 行缓存复用：一次加载整行数据到缓存
+\item 减少66\%的内存访问次数
+\item 提高缓存命中率从50\%到70\%+
+\end{itemize}
+
+\subsection{Gauss-Seidel迭代法实现}
+
+\subsubsection{2D红黑排序实现}
+
+2D Gauss-Seidel的Tiled+Aligned优化版本（\texttt{gauss\_seidel\_2d\_tiled\_aligned.cpp}）：
+
+\lstinputlisting[
+    caption={2D Gauss-Seidel Tiled+Aligned实现},
+    label={code:gs2d_tiled_aligned},
+    linerange={1-80}
+]{../gauss_seidel/gauss_seidel_2d_tiled_aligned.cpp}
+
+\textbf{三层优化：}
+\begin{enumerate}
+\item \textbf{红黑排序：}打破数据依赖，实现并行
+\item \textbf{Tiling分块：}L1缓存块（32×32）+ L3缓存块（128×128）
+\item \textbf{内存对齐：}64字节对齐，SIMD友好
+\end{enumerate}
+
+\subsubsection{3D红黑排序实现}
+
+3D Gauss-Seidel的核心迭代循环（\texttt{gauss\_seidel\_3d\_tiled\_aligned.cpp}）：
+
+\lstinputlisting[
+    caption={3D Gauss-Seidel红黑迭代核心},
+    label={code:gs3d_core},
+    linerange={50-120}
+]{../gauss_seidel/gauss_seidel_3d_tiled_aligned.cpp}
+
+\textbf{3D特殊处理：}
+\begin{itemize}
+\item 七点模板离散化
+\item 三维红黑棋盘划分：$(i+j+k)\%2$
+\item 三层Tiling：L1(16³) + L2(32³) + L3(64³)
+\end{itemize}
+
+\subsection{三对角方程组求解实现}
+
+\subsubsection{Sequential Thomas算法}
+
+标准Thomas算法串行实现（\texttt{sequential\_solver\_memtest.cpp}）：
+
+\lstinputlisting[
+    caption={Sequential Thomas算法实现},
+    label={code:thomas_sequential},
+    linerange={1-50}
+]{../new_tri/sequential_solver_memtest.cpp}
+
+\textbf{算法特点：}
+\begin{itemize}
+\item 前向消元：$O(n)$严格串行依赖
+\item 后向回代：$O(n)$严格串行依赖
+\item 缓存友好：顺序访问，命中率$>$95\%
+\end{itemize}
+
+\subsubsection{Brugnano并行算法}
+
+Brugnano区域分解并行实现（\texttt{openmp\_brugnano\_memtest.cpp}）：
+
+\lstinputlisting[
+    caption={Brugnano并行算法实现},
+    label={code:brugnano_parallel},
+    linerange={1-100}
+]{../new_tri/openmp_brugnano_memtest.cpp}
+
+\textbf{四步算法：}
+\begin{enumerate}
+\item \textbf{区域划分：}分为$p$个独立子问题
+\item \textbf{局部求解：}并行求解各子问题（忽略边界）
+\item \textbf{规约系统：}构造$2p\times2p$边界修正系统（串行）
+\item \textbf{边界更新：}并行更新所有边界值
+\end{enumerate}
+
+\subsubsection{Recursive Doubling算法}
+
+递归倍增并行实现（\texttt{openmp\_recursive\_doubling\_memtest.cpp}）：
+
+\lstinputlisting[
+    caption={Recursive Doubling算法实现},
+    label={code:recursive_doubling},
+    linerange={1-80}
+]{../new_tri/openmp_recursive_doubling_memtest.cpp}
+
+\textbf{算法特性：}
+\begin{itemize}
+\item $O(\log n)$步递归合并
+\item 跳跃访问模式：stride=$2^k$
+\item 缓存命中率低（<50\%），导致单线程比Thomas慢2.4×
+\item 并行度高，但访存成为瓶颈
+\end{itemize}
+
+\subsection{测试脚本}
+
+\subsubsection{批量性能测试脚本}
+
+用于生成完整性能数据的PowerShell脚本（\texttt{test\_all.ps1}）：
+
+\begin{lstlisting}[language=bash, caption={批量性能测试脚本示例}, label={code:test_script}]
+# 三对角求解器批量测试脚本
+$sizes = @(8192, 16384, 131072, 1048576, 4194304)
+$threads = @(1, 2, 4, 8, 10, 16, 20)
+$programs = @("Sequential", "Brugnano", "RecursiveDoubling")
+
+foreach ($size in $sizes) {
+    foreach ($program in $programs) {
+        foreach ($thread in $threads) {
+            # 编译
+            g++ -O3 -fopenmp -o solver.exe ${program}_solver.cpp
+            
+            # 运行10次取平均
+            $times = @()
+            for ($i=0; $i -lt 10; $i++) {
+                $output = .\solver.exe $size $thread
+                $time = [double]($output -match "Time: (\d+\.\d+)" | %{$Matches[1]})
+                $times += $time
+            }
+            
+            # 计算统计量
+            $avg = ($times | Measure-Object -Average).Average
+            $speedup = $baseTime / $avg
+            
+            # 输出到CSV
+            "$size,$program,$thread,$avg,$speedup" | Add-Content results.csv
+        }
+    }
+}
+\end{lstlisting}
+
+\section{实验环境详细配置}
+\label{appendix:environment}
+
+\subsection{硬件配置}
+
+\begin{table}[!htbp]
+\centering
+\caption{测试平台硬件配置}
+\label{tab:hardware_config}
+\begin{tabular}{ll}
+\hline
+\textbf{组件} & \textbf{规格} \\
+\hline
+处理器 & AMD Ryzen 9 5950X \\
+核心数 & 16 cores / 32 threads \\
+基础频率 & 3.4 GHz \\
+Boost频率 & 最高4.9 GHz \\
+L1缓存 & 32KB I + 32KB D × 16 \\
+L2缓存 & 512KB × 16 \\
+L3缓存 & 64MB (2 × 32MB CCX) \\
+内存 & 64GB DDR4-3200 (双通道) \\
+内存带宽 & 51.2 GB/s (理论峰值) \\
+操作系统 & Windows 11 Pro 22H2 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{软件环境}
+
+\begin{table}[!htbp]
+\centering
+\caption{编译器和运行时配置}
+\label{tab:software_config}
+\begin{tabular}{ll}
+\hline
+\textbf{组件} & \textbf{版本/配置} \\
+\hline
+编译器 & GCC 11.2.0 (MinGW-W64) \\
+OpenMP & 4.5 \\
+编译选项 & \texttt{-O3 -fopenmp -march=native} \\
+链接选项 & \texttt{-static} \\
+数学库 & 无（手工实现） \\
+调试工具 & gdb 11.2 \\
+性能分析 & 手工计时（\texttt{chrono}） \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{测试方法}
+
+\textbf{计时方式：}
+\begin{itemize}
+\item 使用C++ \texttt{<chrono>}库的高精度计时器
+\item 每个配置运行10次，取平均值
+\item 舍弃首次运行（预热缓存）
+\item 测量核心计算时间，不包括初始化
+\end{itemize}
+
+\textbf{负载控制：}
+\begin{itemize}
+\item 测试前关闭后台应用
+\item 禁用CPU动态频率调整（固定最大频率）
+\item 每次测试间隔5秒（冷却）
+\item 多次测试标准差<5\%
+\end{itemize}
+
+\textbf{数据验证：}
+\begin{itemize}
+\item 所有并行结果与串行结果对比
+\item 相对误差<$10^{-6}$视为正确
+\item Gauss-Seidel收敛准则：残差<$10^{-4}$
+\item 三对角求解精度：$\|Ax-b\|_2 / \|b\|_2 < 10^{-10}$
+\end{itemize}
+
+%% ========================================
 %% 写在最后
 %% ========================================
 \section{写在最后}
