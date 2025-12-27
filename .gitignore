@@ -22,3 +22,7 @@
 *.out
 *.app
 *.txt
+/大作业文档/main.aux
+/大作业文档/main.log
+/大作业文档/main.toc
+/大作业文档/main.synctex.gz
