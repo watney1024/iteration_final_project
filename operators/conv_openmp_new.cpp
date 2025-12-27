@@ -31,7 +31,7 @@ public:
         tensor.resize(dim * channel * height * width);
     }
 
-    // å¤šæ€æ„é€ å‡½æ•°
+    // ¶àÌ¬¹¹Ôìº¯Êı
     Mat(int d, int c, int h, int w) : dim(d), channel(c), height(h), width(w) {
         tensor.resize(d * c * h * w);
     }
@@ -155,83 +155,80 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
               const std::vector<int> &conv_kernel_size, const std::vector<int> &conv_stride, int conv_padding)
 {
     double start = get_current_time();
-    int weight_pos = 0;
-    int conv_kernel_max = conv_kernel_size[0] * conv_kernel_size[1];
+    
+    // Ã¿´Î¶¼ÖØĞÂ¼ÆËãpadding
     Mat padded_mat = padd(input, conv_padding);
-    float sum = 0;
-    int cnt[1000];
-    memset(cnt, 0, sizeof cnt);
-    int dx[25];
-    memset(dx, 0, sizeof dx);
-    if (conv_kernel_max == 9)
-    {
-        // ç›´æ¥åˆå§‹åŒ–æ•°ç»„çš„å‰9ä¸ªå…ƒç´ 
-        dx[0] = 0;
-        dx[1] = 1;
-        dx[2] = 2;
-        dx[3] = padded_mat.width;
-        dx[4] = padded_mat.width + 1;
-        dx[5] = padded_mat.width + 2;
-        dx[6] = 2 * padded_mat.width;
-        dx[7] = 2 * padded_mat.width + 1;
-        dx[8] = 2 * padded_mat.width + 2;
-    }
-    if (conv_kernel_max == 25)
-    {
-        dx[0] = 0;
-        dx[1] = 1;
-        dx[2] = 2;
-        dx[3] = 3;
-        dx[4] = 4;
-        dx[5] = padded_mat.width;
-        dx[6] = padded_mat.width + 1;
-        dx[7] = padded_mat.width + 2;
-        dx[8] = padded_mat.width + 3;
-        dx[9] = padded_mat.width + 4;
-        dx[10] = 2 * padded_mat.width;
-        dx[11] = 2 * padded_mat.width + 1;
-        dx[12] = 2 * padded_mat.width + 2;
-        dx[13] = 2 * padded_mat.width + 3;
-        dx[14] = 2 * padded_mat.width + 4;
-        dx[15] = 3 * padded_mat.width;
-        dx[16] = 3 * padded_mat.width + 1;
-        dx[17] = 3 * padded_mat.width + 2;
-        dx[18] = 3 * padded_mat.width + 3;
-        dx[19] = 3 * padded_mat.width + 4;
-        dx[20] = 4 * padded_mat.width;
-        dx[21] = 4 * padded_mat.width + 1;
-        dx[22] = 4 * padded_mat.width + 2;
-        dx[23] = 4 * padded_mat.width + 3;
-        dx[24] = 4 * padded_mat.width + 4;
-    }
-    #pragma omp parallel for
-    for (int i = 0; i < output.channel; ++i)
-    {
-        //#pragma omp parallel for
-        for (int d = 0; d < padded_mat.dim; ++d)
-        {
-            //#pragma omp parallel for
-            for (int c = 0; c < padded_mat.channel; ++c)
-            {
-                int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
-                //#pragma omp parallel for
-                for (int h = 0; h < input.height; h += conv_stride[0])
-                {
-                    //#pragma omp parallel for
-                    for (int w = 0; w < input.width; w += conv_stride[1])
-                    {
-                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
-                        int output_index = i * output.height * output.width + h * output.width + w;
-                        for (int m = 0; m < conv_kernel_max; ++m)
-                        {
-                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
-                        }
-                    }
+    
+    int out_h = output.height;
+    int out_w = output.width;
+    int in_h = padded_mat.height;
+    int in_w = padded_mat.width;
+    int kernel_h = conv_kernel_size[0];
+    int kernel_w = conv_kernel_size[1];
+    int stride_h = conv_stride[0];
+    int stride_w = conv_stride[1];
+    int channel_out = output.channel;
+    int channel_in = padded_mat.channel;
+    int kernel_max = kernel_h * kernel_w;
+    
+    // ¶şÎ¬¿Õ¼ä²¢ĞĞ£ºÈÎÎñÊı = 150 ¡Á 150 = 22,500
+    // Ã¿¸öÏß³Ì´¦ÀíÒ»¸öÊä³öÎ»ÖÃµÄËùÓĞÍ¨µÀ£¬±ÜÃâfalse sharing
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int oh = 0; oh < out_h; ++oh) {
+        for (int ow = 0; ow < out_w; ++ow) {
+            int h_start = oh * stride_h;
+            int w_start = ow * stride_w;
+            
+            // Ã¿¸öÊä³öµã¶ÀÁ¢¼ÆËãËùÓĞÊä³öÍ¨µÀ
+            for (int oc = 0; oc < channel_out; ++oc) {
+                float sum = 0.0f;
+                
+                // ±éÀúËùÓĞÊäÈëÍ¨µÀ
+                for (int ic = 0; ic < channel_in; ++ic) {
+                    const float* input_ptr = &padded_mat.tensor[
+                        ic * in_h * in_w + h_start * in_w + w_start];
+                    const float* weight_ptr = &weight[oc * channel_in * kernel_max + ic * kernel_max];
+                    
+                    // 5¡Á5¾í»ıºËÍêÈ«ÊÖ¶¯Õ¹¿ª£¨25Ïî£©
+                    sum += weight_ptr[0] * input_ptr[0];
+                    sum += weight_ptr[1] * input_ptr[1];
+                    sum += weight_ptr[2] * input_ptr[2];
+                    sum += weight_ptr[3] * input_ptr[3];
+                    sum += weight_ptr[4] * input_ptr[4];
+                    
+                    sum += weight_ptr[5] * input_ptr[in_w];
+                    sum += weight_ptr[6] * input_ptr[in_w + 1];
+                    sum += weight_ptr[7] * input_ptr[in_w + 2];
+                    sum += weight_ptr[8] * input_ptr[in_w + 3];
+                    sum += weight_ptr[9] * input_ptr[in_w + 4];
+                    
+                    sum += weight_ptr[10] * input_ptr[2 * in_w];
+                    sum += weight_ptr[11] * input_ptr[2 * in_w + 1];
+                    sum += weight_ptr[12] * input_ptr[2 * in_w + 2];
+                    sum += weight_ptr[13] * input_ptr[2 * in_w + 3];
+                    sum += weight_ptr[14] * input_ptr[2 * in_w + 4];
+                    
+                    sum += weight_ptr[15] * input_ptr[3 * in_w];
+                    sum += weight_ptr[16] * input_ptr[3 * in_w + 1];
+                    sum += weight_ptr[17] * input_ptr[3 * in_w + 2];
+                    sum += weight_ptr[18] * input_ptr[3 * in_w + 3];
+                    sum += weight_ptr[19] * input_ptr[3 * in_w + 4];
+                    
+                    sum += weight_ptr[20] * input_ptr[4 * in_w];
+                    sum += weight_ptr[21] * input_ptr[4 * in_w + 1];
+                    sum += weight_ptr[22] * input_ptr[4 * in_w + 2];
+                    sum += weight_ptr[23] * input_ptr[4 * in_w + 3];
+                    sum += weight_ptr[24] * input_ptr[4 * in_w + 4];
                 }
+                
+                // Ğ´ÈëÊä³ö£¨Ã¿¸öÏß³ÌĞ´Èë²»Í¬µÄÄÚ´æÎ»ÖÃ£¬ÎŞfalse sharing£©
+                output.tensor[oc * out_h * out_w + oh * out_w + ow] = sum;
             }
         }
     }
-    //#pragma omp parallel for
+    
+    // bias´¦Àí±£³ÖÔ­Ñù£º°´Í¨µÀ²¢ĞĞ
+    #pragma omp parallel for
     for (int i = 0; i < output.channel; ++i)
     {
         for (int j = 0; j < output.height * output.width; ++j)
@@ -239,6 +236,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
             output[i * output.height * output.width + j] += bias[i];
         }
     }
+    
     double end = get_current_time();
     return (end - start);
 }
@@ -248,7 +246,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
 
 int main(int argc, char* argv[])
 {
-    // ä»å‘½ä»¤è¡Œå‚æ•°è·å–çº¿ç¨‹æ•°ï¼Œé»˜è®¤ä¸º20
+    // ´ÓÃüÁîĞĞ²ÎÊı»ñÈ¡Ïß³ÌÊı£¬Ä¬ÈÏÎª20
     int num_threads = 20;
     if (argc > 1)
     {
@@ -260,7 +258,8 @@ int main(int argc, char* argv[])
         }
     }
     omp_set_num_threads(num_threads);
-    std::cout << "Using " << num_threads << " threads" << std::endl;
+    //std::cout << "Using " << num_threads << " threads" << std::endl;
+    //std::cout << "2D spatial parallelism - tasks: 150x150 = 22,500" << std::endl;
     
     std::vector<float> conv2_weight(32 * 3 * 5 * 5);
     std::vector<float> conv2_bias(32);
@@ -270,19 +269,19 @@ int main(int argc, char* argv[])
     readBinaryFile(conv2_bias_path, conv2_bias);
     pretensor(conv2_input);
     
-    // è¿›è¡Œ250æ¬¡æµ‹è¯•ï¼Œå‰50æ¬¡é¢„çƒ­ï¼Œå200æ¬¡è®¡ç®—ä¸­ä½æ•°å’ŒP99
+    // ½øĞĞ250´Î²âÊÔ£¬Ç°50´ÎÔ¤ÈÈ£¬ºó200´Î¼ÆËãÖĞÎ»ÊıºÍP99
     const int total_iterations = 250;
     const int warmup_iterations = 50;
     double times[total_iterations];
     
     for (int i = 0; i < total_iterations; ++i)
     {
-        // é‡ç½®è¾“å‡ºçŸ©é˜µ
+        // ÖØÖÃÊä³ö¾ØÕó
         std::fill(conv2_output.tensor.begin(), conv2_output.tensor.end(), 0);
         times[i] = conv2d(conv2_input, conv2_output, conv2_weight, conv2_bias, conv_kernel_size, conv_stride, padding);
     }
     
-    // æå–å200æ¬¡çš„æ—¶é—´æ•°æ®å¹¶æ’åº
+    // ÌáÈ¡ºó200´ÎµÄÊ±¼äÊı¾İ²¢ÅÅĞò
     const int valid_count = total_iterations - warmup_iterations;
     std::vector<double> valid_times(valid_count);
     for (int i = 0; i < valid_count; ++i)
@@ -291,7 +290,7 @@ int main(int argc, char* argv[])
     }
     std::sort(valid_times.begin(), valid_times.end());
     
-    // è®¡ç®—ä¸­ä½æ•°ï¼ˆç¬¬50ç™¾åˆ†ä½ï¼‰
+    // ¼ÆËãÖĞÎ»Êı£¨µÚ50°Ù·ÖÎ»£©
     double median;
     if (valid_count % 2 == 0)
     {
@@ -302,7 +301,7 @@ int main(int argc, char* argv[])
         median = valid_times[valid_count / 2];
     }
     
-    // è®¡ç®—P99ï¼ˆç¬¬99ç™¾åˆ†ä½ï¼‰
+    // ¼ÆËãP99£¨µÚ99°Ù·ÖÎ»£©
     int p99_index = (int)(valid_count * 0.99) - 1;
     if (p99_index < 0) p99_index = 0;
     if (p99_index >= valid_count) p99_index = valid_count - 1;

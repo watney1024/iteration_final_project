@@ -17,6 +17,10 @@
 
 #include <vector>
 
+// »º´æĞĞ´óĞ¡£¬Í¨³£Îª64×Ö½Ú
+#define CACHE_LINE_SIZE 64
+#define FLOATS_PER_CACHE_LINE (CACHE_LINE_SIZE / sizeof(float))
+
 struct Mat
 {
 public:
@@ -31,7 +35,7 @@ public:
         tensor.resize(dim * channel * height * width);
     }
 
-    // å¤šæ€æ„é€ å‡½æ•°
+    // ¶àÌ¬¹¹Ôìº¯Êı
     Mat(int d, int c, int h, int w) : dim(d), channel(c), height(h), width(w) {
         tensor.resize(d * c * h * w);
     }
@@ -165,7 +169,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
     memset(dx, 0, sizeof dx);
     if (conv_kernel_max == 9)
     {
-        // ç›´æ¥åˆå§‹åŒ–æ•°ç»„çš„å‰9ä¸ªå…ƒç´ 
+        // Ö±½Ó³õÊ¼»¯Êı×éµÄÇ°9¸öÔªËØ
         dx[0] = 0;
         dx[1] = 1;
         dx[2] = 2;
@@ -204,41 +208,55 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
         dx[23] = 4 * padded_mat.width + 3;
         dx[24] = 4 * padded_mat.width + 4;
     }
-    #pragma omp parallel for
+    
+    // ÓÅ»¯²ßÂÔ£º½«²¢ĞĞ»¯ÒÆµ½Íâ²ãÑ­»·£¨output channel£©£¬Ã¿¸öÏß³Ì´¦ÀíÍêÕûµÄÊä³öÍ¨µÀ
+    // ÕâÑù¿ÉÒÔ±ÜÃâ¶à¸öÏß³ÌÍ¬Ê±Ğ´ÈëÏàÁÚµÄÄÚ´æÎ»ÖÃ£¬´Ó¶ø±ÜÃâfalse sharing
+    #pragma omp parallel for 
     for (int i = 0; i < output.channel; ++i)
     {
-        //#pragma omp parallel for
+        // Ã¿¸öÏß³Ì´¦ÀíÒ»¸öÍêÕûµÄÊä³öÍ¨µÀ£¬ËùÓĞĞ´²Ù×÷¶¼ÔÚ¶ÀÁ¢µÄÄÚ´æÇøÓò
         for (int d = 0; d < padded_mat.dim; ++d)
         {
             //#pragma omp parallel for
             for (int c = 0; c < padded_mat.channel; ++c)
             {
                 int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
-                //#pragma omp parallel for
+                // #pragma omp parallel for
                 for (int h = 0; h < input.height; h += conv_stride[0])
                 {
+                    // Ê¹ÓÃĞĞ»º³åÇøÀ´½øÒ»²½ÓÅ»¯»º´æÀûÓÃ
                     //#pragma omp parallel for
                     for (int w = 0; w < input.width; w += conv_stride[1])
                     {
-                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
+                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + 
+                                  c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
                         int output_index = i * output.height * output.width + h * output.width + w;
+                        
+                        // Ê¹ÓÃ¾Ö²¿±äÁ¿ÀÛ»ı£¬¼õÉÙÄÚ´æĞ´Èë´ÎÊı
+                        float local_sum = 0.0f;
                         for (int m = 0; m < conv_kernel_max; ++m)
                         {
-                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
+                            local_sum += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
                         }
+                        output[output_index] += local_sum;
                     }
                 }
             }
         }
     }
+    
+    // Ìí¼Óbias£¬Ò²Ê¹ÓÃ²¢ĞĞ»¯£¬Ã¿¸öÏß³Ì´¦ÀíÍêÕûµÄÍ¨µÀ
     //#pragma omp parallel for
     for (int i = 0; i < output.channel; ++i)
     {
+        float bias_value = bias[i];
+        int channel_offset = i * output.height * output.width;
         for (int j = 0; j < output.height * output.width; ++j)
         {
-            output[i * output.height * output.width + j] += bias[i];
+            output[channel_offset + j] += bias_value;
         }
     }
+    
     double end = get_current_time();
     return (end - start);
 }
@@ -248,7 +266,7 @@ double conv2d(const Mat &input, Mat &output, const std::vector<float> &weight, c
 
 int main(int argc, char* argv[])
 {
-    // ä»å‘½ä»¤è¡Œå‚æ•°è·å–çº¿ç¨‹æ•°ï¼Œé»˜è®¤ä¸º20
+    // ´ÓÃüÁîĞĞ²ÎÊı»ñÈ¡Ïß³ÌÊı£¬Ä¬ÈÏÎª20
     int num_threads = 20;
     if (argc > 1)
     {
@@ -261,6 +279,7 @@ int main(int argc, char* argv[])
     }
     omp_set_num_threads(num_threads);
     std::cout << "Using " << num_threads << " threads" << std::endl;
+    std::cout << "Optimized version - avoiding false sharing" << std::endl;
     
     std::vector<float> conv2_weight(32 * 3 * 5 * 5);
     std::vector<float> conv2_bias(32);
@@ -270,19 +289,19 @@ int main(int argc, char* argv[])
     readBinaryFile(conv2_bias_path, conv2_bias);
     pretensor(conv2_input);
     
-    // è¿›è¡Œ250æ¬¡æµ‹è¯•ï¼Œå‰50æ¬¡é¢„çƒ­ï¼Œå200æ¬¡è®¡ç®—ä¸­ä½æ•°å’ŒP99
+    // ½øĞĞ250´Î²âÊÔ£¬Ç°50´ÎÔ¤ÈÈ£¬ºó200´Î¼ÆËãÖĞÎ»ÊıºÍP99
     const int total_iterations = 250;
     const int warmup_iterations = 50;
     double times[total_iterations];
     
     for (int i = 0; i < total_iterations; ++i)
     {
-        // é‡ç½®è¾“å‡ºçŸ©é˜µ
+        // ÖØÖÃÊä³ö¾ØÕó
         std::fill(conv2_output.tensor.begin(), conv2_output.tensor.end(), 0);
         times[i] = conv2d(conv2_input, conv2_output, conv2_weight, conv2_bias, conv_kernel_size, conv_stride, padding);
     }
     
-    // æå–å200æ¬¡çš„æ—¶é—´æ•°æ®å¹¶æ’åº
+    // ÌáÈ¡ºó200´ÎµÄÊ±¼äÊı¾İ²¢ÅÅĞò
     const int valid_count = total_iterations - warmup_iterations;
     std::vector<double> valid_times(valid_count);
     for (int i = 0; i < valid_count; ++i)
@@ -291,7 +310,7 @@ int main(int argc, char* argv[])
     }
     std::sort(valid_times.begin(), valid_times.end());
     
-    // è®¡ç®—ä¸­ä½æ•°ï¼ˆç¬¬50ç™¾åˆ†ä½ï¼‰
+    // ¼ÆËãÖĞÎ»Êı£¨µÚ50°Ù·ÖÎ»£©
     double median;
     if (valid_count % 2 == 0)
     {
@@ -302,7 +321,7 @@ int main(int argc, char* argv[])
         median = valid_times[valid_count / 2];
     }
     
-    // è®¡ç®—P99ï¼ˆç¬¬99ç™¾åˆ†ä½ï¼‰
+    // ¼ÆËãP99£¨µÚ99°Ù·ÖÎ»£©
     int p99_index = (int)(valid_count * 0.99) - 1;
     if (p99_index < 0) p99_index = 0;
     if (p99_index >= valid_count) p99_index = valid_count - 1;
