@@ -143,7 +143,7 @@ Mat padd(const Mat input, int this_padding)
     std::fill(new_mat.tensor.begin(), new_mat.tensor.end(), 0);
     
     // 并行复制数据：按通道并行
-    #pragma omp parallel for
+    // #pragma omp parallel for
     for (int c = 0; c < input.channel; ++c)
     {
         int src_channel_offset = c * input.height * input.width;
