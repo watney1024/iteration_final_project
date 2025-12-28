@@ -30,3 +30,6 @@
 /latex/main.loc
 /latex/main.toc
 textput.log
+
+# 忽略new_tri目录下的batch_results文件夹
+new_tri/batch_results*/
