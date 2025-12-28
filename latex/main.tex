@@ -232,91 +232,22 @@ Roofline模型是分析程序性能的重要工具，它描述了性能上限由
 本项目实现了三个版本的卷积算子，展示了从串行到并行、再到深度优化的演进过程。
 
 \textbf{版本1：串行实现} - 使用动态计数器记录输出位置，逻辑简单但存在数据依赖，无法直接并行。
-\begin{lstlisting}[language=C++]
-// 动态计数器，记录每个通道的输出位置
-int cnt[100];
-memset(cnt, 0, sizeof cnt);
-int weight_pos = 0;
-for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
-    for (int i = 0; i < output.channel; ++i) {  // 输出通道
-        for (int c = 0; c < padded_mat.channel; ++c) {  // 输入通道
-            for (int h = 0; h < padded_mat.height; h += conv_stride[0]) {
-                if (h + conv_kernel_size[0] > padded_mat.height) continue;
-                for (int w = 0; w < padded_mat.width; w += conv_stride[1]) {
-                    if (w + conv_kernel_size[1] > padded_mat.width) continue;
-                    int index = d * pc * ph * pw + c * ph * pw + h * pw + w;
-                    sum = 0;
-                    // 卷积核计算
-                    for (int k = 0; k < conv_kernel_max; ++k) {
-                        sum += (padded_mat[index + dx[k]] * weight[weight_pos + k]);
-                    }
-                    output[cnt[c]++] += sum;  // 动态累加到输出
-                }
-            }
-            weight_pos += conv_kernel_max;  // 权重位置累加
-        }
-    }
-}
-\end{lstlisting}
+
+\autoref{lst:conv_serial}展示了该版本的核心代码。
+
 \textbf{问题分析：}\texttt{cnt[c]++}操作存在数据竞争而无法直接并行化，\texttt{weight\_pos}采用循环累加的实现方式导致存在跨线程依赖，同时索引计算逻辑复杂也显著降低了执行性能。\\
 \\
 \textbf{版本2：并行实现} - 改为静态索引计算，在输出通道维度并行，消除依赖但并行粒度仅32。
 
-\begin{lstlisting}[language=C++]
-    #pragma omp parallel for  // 在输出通道维度并行
-    for (int i = 0; i < output.channel; ++i) {
-        for (int d = 0; d < padded_mat.dim; ++d) {
-            for (int c = 0; c < padded_mat.channel; ++c) {
-                // 静态计算权重位置，消除依赖
-                int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
-                for (int h = 0; h < input.height; h += conv_stride[0]) {
-                    for (int w = 0; w < input.width; w += conv_stride[1]) {
-                        // 静态计算输出位置
-                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width 
-                                + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
-                        int output_index = i * output.height * output.width + h * output.width + w;
-                        // 卷积核计算
-                        for (int m = 0; m < conv_kernel_max; ++m) {
-                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
-                        }
-                    }
-                }
-            }
-        }
-    }
-\end{lstlisting}
+\autoref{lst:conv_naive}展示了该版本的核心代码。
 
 \textbf{问题分析：}
 索引计算逻辑仍较为复杂，导致计算开销偏高；相同索引被多次重复计算，进一步增加了性能损耗；此外，代码还可能存在伪共享（False Sharing）问题，影响并行执行效率。\\
 \\
 \textbf{版本3：深度优化实现} - 针对版本2的瓶颈实现三方面优化：
-\begin{enumerate}
-    \item \textbf{并行化Padding}：按通道并行+\texttt{memcpy}批量复制，padding时间降至原来的1/5
-    \item \textbf{二维空间并行}：使用\texttt{collapse(2)}合并$h \times w$循环，任务数从32提升至22,500，负载均衡显著改善
-    \item \textbf{Bias融合}：在卷积计算时直接加bias，消除720K次额外内存访问
-\end{enumerate}
-\begin{lstlisting}[language=C++]
-    // 二维空间并行：任务数 = 150 × 150 = 22,500 每个线程处理一个输出位置的所有通道，避免false sharing
-    #pragma omp parallel for collapse(2) schedule(static)
-    for (int oh = 0; oh < out_h; ++oh) {
-        for (int ow = 0; ow < out_w; ++ow) {
-            int h_start = oh * stride_h;
-            int w_start = ow * stride_w;
-            // 每个输出点独立计算所有输出通道
-            for (int oc = 0; oc < channel_out; ++oc) {
-                float sum = 0.0f;
-                // 遍历所有输入通道
-                for (int ic = 0; ic < channel_in; ++ic) {
-                    const float* input_ptr = &padded_mat.tensor[
-                        ic * in_h * in_w + h_start * in_w + w_start];
-                    const float* weight_ptr = &weight[oc * channel_in * kernel_max + ic * kernel_max];
-                    // 5×5卷积核完全手动展开（25项）
-                    ...(展开代码略)
-                output.tensor[oc * out_h * out_w + oh * out_w + ow] = sum + bias[oc];
-            }
-        }
-    }
-\end{lstlisting}
+
+\autoref{lst:conv_optimized}展示了该版本的核心代码。
+
 如\autoref{tab:parallel_perf}所示，三个版本的性能对比清晰展现了优化效果。
 
 \begin{table}[htbp]
@@ -391,77 +322,11 @@ for (int d = 0; d < padded_mat.dim; ++d) {  // batch维度
 \subsubsection{并行实现与性能}
 \textbf{版本1：普通并行} - 仅添加\texttt{\#pragma omp parallel for}，在通道维度并行。
 
-\begin{lstlisting}[language=C++]
-    for (int d = 0; d < input.dim; ++d){
-        // #pragma omp parallel for (普通并行只要在这加入并行即可)
-        for (int c = 0; c < input.channel; ++c){
-            for (int oh = 0; oh < out_h; ++oh){
-                for (int ow = 0; ow < out_w; ++ow){
-                    float sum = 0.0;
-                    int count = 0;
-                    for (int kh = 0; kh < avgp_kernel_size[0]; ++kh){
-                        for (int kw = 0; kw < avgp_kernel_size[1]; ++kw){
-                            int h = oh * avgp_stride[1] + kh;
-                            int w = ow * avgp_stride[0] + kw;
-                            if (h < input_h && w < input_w){
-                                int index = (d * input.channel * input_h * input_w) + (c * input_h * input_w) + (h * input_w) + w;
-                                sum += input[index];
-                                count++;
-                            }
-                        }
-                    }
-                    output[(d * output.channel * out_h * out_w) + (c * out_h * out_w) + (oh * out_w) + ow] = sum / count;
-                }
-            }
-        }
-    }
-\end{lstlisting}
+\autoref{lst:avgpool_naive}展示了该版本的核心代码。
 
 \textbf{版本2：访存优化} - 通过预计算通道指针、优化边界检查和针对2x2池化的特殊优化，提升内存访问效率。
 
-\begin{lstlisting}[language=C++]
-    for (int d = 0; d < input.dim; ++d) {
-    #pragma omp parallel for
-    for (int c = 0; c < input.channel; ++c) {
-        // 使用指针预计算通道偏移量
-        const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
-        float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
-            // 针对步长为2的2x2卷积核的专用优化
-            for (int oh = 0; oh < out_h; ++oh) {
-                for (int ow = 0; ow < out_w; ++ow) {
-                    int h_start = oh * 2;
-                    int w_start = ow * 2;
-                    if (h_start + 1 < input_h && w_start + 1 < input_w) {
-                        int idx_00 = h_start * input_w + w_start;
-                        int idx_01 = idx_00 + 1;
-                        int idx_10 = idx_00 + input_w;
-                        int idx_11 = idx_10 + 1;
-                        float sum = input_channel_ptr[idx_00] + 
-                                   input_channel_ptr[idx_01] + 
-                                   input_channel_ptr[idx_10] + 
-                                   input_channel_ptr[idx_11];
-                        output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // 使用乘法代替除法（更高效）
-                    } else { // 边界情况 - 使用通用处理方式
-                        float sum = 0.0f;
-                        int count = 0;
-                        for (int kh = 0; kh < 2; ++kh) {
-                            for (int kw = 0; kw < 2; ++kw) {
-                                int h = h_start + kh;
-                                int w = w_start + kw;
-                                if (h < input_h && w < input_w) {
-                                    sum += input_channel_ptr[h * input_w + w];
-                                    count++;
-                                }
-                            }
-                        }
-                        output_channel_ptr[oh * out_w + ow] = sum / count;
-                    }
-                }
-            }                 
-        }
-    }
-}
-\end{lstlisting}
+\autoref{lst:avgpool_optimized}展示了该版本的核心代码。
 
 池化操作属典型访存密集型算子，在通道维度并行，使用连续内存访问模式提高缓存命中率。
 
@@ -701,58 +566,7 @@ $$
     \item \textbf{静态调度}：\texttt{schedule(static)}确保负载均匀分配
 \end{itemize}
 
-\begin{lstlisting}[language=C++]
-    // gauss_seidel_2d.cpp 核心代码
-void solve_parallel_redblack(/* ... */) {
-    omp_set_num_threads(num_threads);
-    // 自适应块大小（根据规模和线程数）
-    int tile_size;
-    if (N <= 64) {
-        tile_size = (num_threads >= 4) ? 16 : 32;
-    } else if (N <= 128) {
-        tile_size = (num_threads >= 8) ? 16 : 32;
-    } else if (N <= 256) {
-        tile_size = 32;
-    } else if (N <= 512) {
-        tile_size = 64;
-    } else {
-        tile_size = 128;
-    }
-    for (int iter = 0; iter < max_iter; ++iter) {
-        // === 红点更新阶段 ===
-        #pragma omp for schedule(static) collapse(2) nowait
-        for (int bi = 1; bi <= N; bi += tile_size) {
-            for (int bj = 1; bj <= N; bj += tile_size) {
-                // 块内更新红点
-                for (int i = bi; i < i_end; ++i) {
-                    // 关键优化：直接步长为2，无条件判断
-                    int j_start = ((i + bi) % 2 == 0) ? bi : bi + 1;
-                    for (int j = j_start; j < j_end; j += 2) {
-                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
-                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
-                    }
-                }
-            }
-        }
-        #pragma omp barrier  // 确保所有红点更新完成
-        // === 黑点更新阶段 ===
-        #pragma omp for schedule(static) collapse(2) nowait
-        for (int bi = 1; bi <= N; bi += tile_size) {
-            for (int bj = 1; bj <= N; bj += tile_size) {
-                // 块内更新黑点（步长同样为2）
-                for (int i = bi; i < i_end; ++i) {
-                    int j_start = ((i + bi) % 2 == 1) ? bi : bi + 1;
-                    for (int j = j_start; j < j_end; j += 2) {
-                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
-                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
-                    }
-                }
-            }
-        }
-        #pragma omp barrier  // 确保所有黑点更新完成
-    }
-}
-\end{lstlisting}
+\autoref{lst:gauss_seidel_2d}展示了该方法的核心代码。
 
 \textbf{优点：}实现简单，对大规模问题（512²以上）效果良好
 
@@ -770,48 +584,8 @@ void solve_parallel_redblack(/* ... */) {
 \end{itemize}
 
 \textbf{性能提升：}在中大规模问题中稳定领先Original方法10-20\%
-\begin{lstlisting}[language=C++]
-    // gauss_seidel_2d_tiled.cpp 核心代码
-void solve_4level_tiling(/* ... */) {
-    // 两级tiling参数
-    const int L3_TILE = (N >= 512) ? 128 : 64;  // 外层：L3 Cache块
-    const int L1_TILE = 16;                      // 内层：L1 Cache块
-    for (int iter = 0; iter < max_iter; ++iter) {
-        // === 红点更新：两级分块 ===
-        #pragma omp for schedule(static) nowait
-        for (int bi = 1; bi <= N; bi += L3_TILE) {
-            int bi_end = std::min(bi + L3_TILE, N + 1);
-            // L1 Cache级别的细粒度分块
-            for (int ti = bi; ti < bi_end; ti += L1_TILE) {
-                int ti_end = std::min(ti + L1_TILE, bi_end);
-                // 预取优化：提前加载下一个L1块
-                #ifdef __x86_64__
-                if (ti + L1_TILE < bi_end) {
-                    _mm_prefetch((const char*)&U(ti + L1_TILE, 1), _MM_HINT_T0);
-                }
-                #endif
-                // 内核循环：访问L1块内的红点
-                for (int i = ti; i < ti_end; ++i) {
-                    int j_start = (i % 2 == 1) ? 1 : 2;  // 红点起始位置
-                    for (int j = j_start; j <= N; j += 2) {
-                        // 显式寄存器缓存邻点值
-                        double reg[4];
-                        reg[0] = U(i-1, j);
-                        reg[1] = U(i+1, j);
-                        reg[2] = U(i, j-1);
-                        reg[3] = U(i, j+1);
-                        U(i, j) = 0.25 * (reg[0] + reg[1] + reg[2] + 
-                                reg[3] + h2 * F(i-1, j-1));
-                    }
-                }
-            }
-        }
-        #pragma omp barrier
-        // === 黑点更新：相同的两级分块策略 ===
-        // ... (结构相同)
-    }
-}
-\end{lstlisting}
+
+\autoref{lst:gauss_seidel_2d_tiled}展示了该方法的核心代码。
 
 
 \subsection{性能测试结果}
@@ -927,6 +701,8 @@ Thomas算法存在严重的\textbf{串行数据依赖}：
 
 这种依赖链使得算法\textbf{无法直接并行化}，必须采用特殊的并行策略。
 
+\autoref{lst:thomas_sequential}展示了Thomas算法的核心代码。
+
 \subsection{Brugnano并行算法 - 区域分解法}
 
 Brugnano方法通过\textbf{区域分解(Domain Decomposition)}实现并行化，核心思想是将原问题分解为多个独立的子问题。
@@ -957,7 +733,7 @@ $$
     \item \textbf{同步优化}：只需2次barrier（局部求解后、规约求解后），开销可控
 \end{itemize}
 
-完整实现代码见附录。
+\autoref{lst:thomas_brugnano}展示了Brugnano方法的核心代码。
 
 \subsection{递归倍增(Recursive Doubling)算法}
 
@@ -989,6 +765,8 @@ $$
     \item \textbf{缺点}：计算开销大（需要$O(n \log n)$次操作），数值稳定性较差
     \item \textbf{适用场景}：大规模问题（$n > 1M$），线程数较多（>8）
 \end{itemize}
+
+\autoref{lst:thomas_recursive_doubling}展示了递归倍增算法的核心代码。
 
 \subsection{并行化难点分析}
 
@@ -1039,7 +817,7 @@ Recursive Doubling方法的额外开销主要体现在计算量、执行效率�
 
 \subsection{性能测试结果}
 
-详细的性能测试数据见附录。主要发现如\autoref{tab:algo_perf_summary_new}所示。
+详细的性能测试数据见\ref {sec:tri_data}。主要发现如\autoref {tab:algo_perf_summary_new}所示。
 
 \begin{table}[!htbp]
     \centering
@@ -1117,7 +895,7 @@ Thomas算法中存在的$O(n)$级串行依赖链，需借助复杂的递归策�
 \label{eq:speedup_scale}
 \end{equation}
 
-表\ref{tab:scale_trend}验证了这一规律：
+\autoref{tab:scale_trend}验证了这一规律：
 
 \begin{table}[htbp]
 \centering
@@ -1138,7 +916,7 @@ Gauss-Seidel 2D & 0.5× & 2.5× & \textbf{4.5×} & 持续增长 \\
 
 \subsubsection{同步开销的主导作用}
 
-在小规模问题中，同步开销主导性能。表\ref{tab:sync_overhead}展示了小规模场景下同步开销与计算时间的对比：
+在小规模问题中，同步开销主导性能。\autoref{tab:sync_overhead}展示了小规模场景下同步开销与计算时间的对比：
 
 \begin{table}[htbp]
 \centering
@@ -1159,7 +937,7 @@ Gauss-Seidel $256^2$ & 2 & $\sim$20 & 10:1 & 0.5× \\
 
 \subsubsection{内存带宽限制}
 
-在大规模问题中，内存带宽成为瓶颈。表\ref{tab:memory_optimization}展示了访存优化的显著效果：
+在大规模问题中，内存带宽成为瓶颈。\autoref{tab:memory_optimization}展示了访存优化的显著效果：
 
 \begin{table}[htbp]
 \centering
@@ -1182,7 +960,7 @@ Gauss-Seidel $256^2$ & 2 & $\sim$20 & 10:1 & 0.5× \\
 
 \subsubsection{线程扩展性的衰减规律}
 
-所有算法都存在"最佳线程数"。表\ref{tab:thread_scaling}展示了不同算法的线程扩展性：
+所有算法都存在"最佳线程数"。\autoref{tab:thread_scaling}展示了不同算法的线程扩展性：
 
 \begin{table}[htbp]
 \centering
@@ -1210,7 +988,7 @@ RecursiveDoubling & 16-20 & 1.76× & 几乎不变（对数通信） \\
 
 \subsubsection{并行不是万能药}
 
-表\ref{tab:parallel_efficiency}汇总了实测并行效率与理论的差距：
+\autoref{tab:parallel_efficiency}汇总了实测并行效率与理论的差距：
 
 \begin{table}[htbp]
 \centering
@@ -1232,7 +1010,7 @@ Gauss-Seidel 3D & 8线程 & 8× & 5.03× & \textbf{63\%} & -37\% \\
 
 \subsubsection{算法复杂度决定并行价值}
 
-核心洞察：\textbf{算法越慢，并行价值越高}。表\ref{tab:complexity_value}量化了这一关系：
+核心洞察：\textbf{算法越慢，并行价值越高}。\autoref{tab:complexity_value}量化了这一关系：
 
 \begin{table}[htbp]
 \centering
@@ -1288,7 +1066,7 @@ Gauss-Seidel & $O(n^2k)$ & $\sim$100 & 高 \\
 
 \textbf{方向1：GPU加速}
 
-三个算法都有潜力在GPU上获得更高加速比。表\ref{tab:gpu_potential}展示了预期提升：
+三个算法都有潜力在GPU上获得更高加速比。\autoref{tab:gpu_potential}展示了预期提升：
 
 \begin{table}[htbp]
 \centering
@@ -1317,7 +1095,7 @@ Gauss-Seidel & 5.0× & \textbf{20-30×} & 红黑同步 \\
 
 \textbf{方向4：能效优化}
 
-在能耗敏感场景（如移动设备、数据中心），性能不是唯一目标。表\ref{tab:energy_efficiency}展示能效比分析：
+在能耗敏感场景（如移动设备、数据中心），性能不是唯一目标。\autoref{tab:energy_efficiency}展示能效比分析：
 
 \begin{table}[htbp]
 \centering
@@ -1809,6 +1587,7 @@ Tiled & 1 & 62053.14 & 1.00x & 100.0 \\
 \end{table}
 \clearpage
 \subsection{三对角方程组求解完整数据}
+\label{sec:tri_data}
 
 \autoref{tab:8k}展示了三对角方程组在数据规模8k下的完整性能数据：
 \begin{table}[!htbp]
@@ -2081,32 +1860,626 @@ RecursiveDoubling & 1  & 933.07  & 0.39   \\
 
 \subsection{神经网络算子实现}
 
+\subsection{Padding实现}
+\begin{lstlisting}[caption={Padding实现}, label={lst:padding}]
+    Mat padd(const Mat input,int this_padding)
+{
+    if(this_padding == 0)
+        return input;
+    int new_height = input.height + 2*this_padding;
+    int new_width = input.width + 2*this_padding;
+    Mat new_mat(input.dim,input.channel,new_height,new_width);
+    std::fill(new_mat.tensor.begin(), new_mat.tensor.end(), 0);
+    for (int c = 0; c < input.channel; ++c)
+    {
+        for (int h = 0; h < input.height; ++h)
+        {
+            for (int w = 0; w < input.width; ++w)
+            {
+                new_mat[c * new_height * new_width + (h + this_padding) * new_width + w + this_padding] = input[c * input.height * input.width + h * input.width + w];
+            }
+        }
+    }
+    return new_mat;
+}
+\end{lstlisting}
+
 \subsubsection{卷积空间并行实现}
 
+\begin{lstlisting}[caption={卷积空间串行实现}, label={lst:conv_serial}]
+    for (int d = 0; d < pd; ++d)
+    { 
+        for (int i = 0; i < oc; ++i)
+        {
+            for (int c = 0; c < pc; ++c)
+            {
+                for (int h = 0; h < ph; h += conv_stride[0])
+                {
+                    if (h + conv_kernel_size[0] > ph)
+                        continue;
+                    for (int w = 0; w < pw; w += conv_stride[1])
+                    {
+                        if (w + conv_kernel_size[1] > pw)
+                            continue;
+                        int index = d * pc * ph * pw + c * ph * pw + h * pw + w;
+                        // std::cout << index << std::endl;
+                        sum = 0;
+                        for (int i = 0; i < conv_kernel_max; ++i)
+                        {
+                            sum += (padded_mat[index + dx[i]] * weight[weight_pos + i]);
+                        }
+                        output[cnt[c]++] += sum;
+                    }
+                }
+                weight_pos += conv_kernel_max;
+            }
+        }
+    }
+    for (int i = 0; i < output.channel; ++i)
+    {
+        for (int j = 0; j < output.height * output.width; ++j)
+        {
+            output[i * output.height * output.width + j] += bias[i];
+        }
+    }
+\end{lstlisting}
+
+\begin{lstlisting}[caption={普通并行实现}, label={lst:conv_naive}]
+    //#pragma omp parallel for
+    for (int d = 0; d < padded_mat.dim; ++d)
+    {
+        #pragma omp parallel for
+        for (int i = 0; i < output.channel; ++i)
+        {
+            //#pragma omp parallel for
+            for (int c = 0; c < padded_mat.channel; ++c)
+            {
+                int weight_pos = i * padded_mat.channel * conv_kernel_max + c * conv_kernel_max;
+                //#pragma omp parallel for
+                for (int h = 0; h < input.height; h += conv_stride[0])
+                {
+                    //#pragma omp parallel for
+                    for (int w = 0; w < input.width; w += conv_stride[1])
+                    {
+                        int index = d * padded_mat.channel * padded_mat.height * padded_mat.width + c * padded_mat.height * padded_mat.width + h * padded_mat.width + w;
+                        int output_index = i * output.height * output.width + h * output.width + w;
+                        for (int m = 0; m < conv_kernel_max; ++m)
+                        {
+                            output[output_index] += (padded_mat[index + dx[m]] * weight[weight_pos + m]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    //#pragma omp parallel for
+    for (int i = 0; i < output.channel; ++i)
+    {
+        for (int j = 0; j < output.height * output.width; ++j)
+        {
+            output[i * output.height * output.width + j] += bias[i];
+        }
+    }
+\end{lstlisting}
 
 
+\begin{lstlisting}[caption={优化后的并行实现}, label={lst:conv_optimized}]
+    // 二维空间并行：任务数 = 150 × 150 = 22,500
+    // 每个线程处理一个输出位置的所有通道，避免false sharing
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int oh = 0; oh < out_h; ++oh) {
+        for (int ow = 0; ow < out_w; ++ow) {
+            int h_start = oh * stride_h;
+            int w_start = ow * stride_w;
+            
+            // 每个输出点独立计算所有输出通道
+            for (int oc = 0; oc < channel_out; ++oc) {
+                float sum = 0.0f;
+                
+                // 遍历所有输入通道
+                for (int ic = 0; ic < channel_in; ++ic) {
+                    const float* input_ptr = &padded_mat.tensor[
+                        ic * in_h * in_w + h_start * in_w + w_start];
+                    const float* weight_ptr = &weight[oc * channel_in * kernel_max + ic * kernel_max];
+                    
+                    // 5×5卷积核完全手动展开（25项）
+                    sum += weight_ptr[0] * input_ptr[0];
+                    sum += weight_ptr[1] * input_ptr[1];
+                    sum += weight_ptr[2] * input_ptr[2];
+                    sum += weight_ptr[3] * input_ptr[3];
+                    sum += weight_ptr[4] * input_ptr[4];
+                    
+                    sum += weight_ptr[5] * input_ptr[in_w];
+                    sum += weight_ptr[6] * input_ptr[in_w + 1];
+                    sum += weight_ptr[7] * input_ptr[in_w + 2];
+                    sum += weight_ptr[8] * input_ptr[in_w + 3];
+                    sum += weight_ptr[9] * input_ptr[in_w + 4];
+                    
+                    sum += weight_ptr[10] * input_ptr[2 * in_w];
+                    sum += weight_ptr[11] * input_ptr[2 * in_w + 1];
+                    sum += weight_ptr[12] * input_ptr[2 * in_w + 2];
+                    sum += weight_ptr[13] * input_ptr[2 * in_w + 3];
+                    sum += weight_ptr[14] * input_ptr[2 * in_w + 4];
+                    
+                    sum += weight_ptr[15] * input_ptr[3 * in_w];
+                    sum += weight_ptr[16] * input_ptr[3 * in_w + 1];
+                    sum += weight_ptr[17] * input_ptr[3 * in_w + 2];
+                    sum += weight_ptr[18] * input_ptr[3 * in_w + 3];
+                    sum += weight_ptr[19] * input_ptr[3 * in_w + 4];
+                    
+                    sum += weight_ptr[20] * input_ptr[4 * in_w];
+                    sum += weight_ptr[21] * input_ptr[4 * in_w + 1];
+                    sum += weight_ptr[22] * input_ptr[4 * in_w + 2];
+                    sum += weight_ptr[23] * input_ptr[4 * in_w + 3];
+                    sum += weight_ptr[24] * input_ptr[4 * in_w + 4];
+                }
+                
+                // 优化：直接加bias再写入，避免后续额外遍历
+                output.tensor[oc * out_h * out_w + oh * out_w + ow] = sum + bias[oc];
+            }
+        }
+    }
+\end{lstlisting}
 \subsubsection{平均池化并行实现}
 
+\begin{lstlisting}[caption={普通并行实现}, label={lst:avgpool_naive}]
+        for (int d = 0; d < input.dim; ++d)
+    {
+        #pragma omp parallel for
+        for (int c = 0; c < input.channel; ++c)
+        {
+            //#pragma omp parallel for
+            for (int oh = 0; oh < out_h; ++oh)
+            {
+                //#pragma omp parallel for
+                for (int ow = 0; ow < out_w; ++ow)
+                {
+                    float sum = 0.0;
+                    int count = 0;
+                    //#pragma omp parallel for
+                    for (int kh = 0; kh < avgp_kernel_size[0]; ++kh)
+                    {
+                        //#pragma omp parallel for
+                        for (int kw = 0; kw < avgp_kernel_size[1]; ++kw)
+                        {
+                            int h = oh * avgp_stride[1] + kh;
+                            int w = ow * avgp_stride[0] + kw;
+                            if (h < input_h && w < input_w)
+                            {
+                                int index = (d * input.channel * input_h * input_w) + (c * input_h * input_w) + (h * input_w) + w;
+                                sum += input[index];
+                                count++;
+                            }
+                        }
+                    }
+                    output[(d * output.channel * out_h * out_w) + (c * out_h * out_w) + (oh * out_w) + ow] = sum / count;
+                }
+            }
+        }
+    }
+\end{lstlisting}
 
+优化后的并行实现(kernel\_size=2的优化版)
+\begin{lstlisting}[caption={优化后的并行实现}, label={lst:avgpool_optimized}]
+\label{}
+    for (int d = 0; d < input.dim; ++d) {
+    #pragma omp parallel for
+    for (int c = 0; c < input.channel; ++c) {
+        // 使用指针预计算通道偏移量
+        const float* input_channel_ptr = &input.tensor[d * input.channel * input_hw + c * input_hw];
+        float* output_channel_ptr = &output.tensor[d * output.channel * output_hw + c * output_hw];
+            // 针对步长为2的2x2卷积核的专用优化
+            for (int oh = 0; oh < out_h; ++oh) {
+                for (int ow = 0; ow < out_w; ++ow) {
+                    int h_start = oh * 2;
+                    int w_start = ow * 2;
+                    if (h_start + 1 < input_h && w_start + 1 < input_w) {
+                        int idx_00 = h_start * input_w + w_start;
+                        int idx_01 = idx_00 + 1;
+                        int idx_10 = idx_00 + input_w;
+                        int idx_11 = idx_10 + 1;
+                        float sum = input_channel_ptr[idx_00] + 
+                                   input_channel_ptr[idx_01] + 
+                                   input_channel_ptr[idx_10] + 
+                                   input_channel_ptr[idx_11];
+                        output_channel_ptr[oh * out_w + ow] = sum * 0.25f; // 使用乘法代替除法（更高效）
+                    } else { // 边界情况 - 使用通用处理方式
+                        float sum = 0.0f;
+                        int count = 0;
+                        for (int kh = 0; kh < 2; ++kh) {
+                            for (int kw = 0; kw < 2; ++kw) {
+                                int h = h_start + kh;
+                                int w = w_start + kw;
+                                if (h < input_h && w < input_w) {
+                                    sum += input_channel_ptr[h * input_w + w];
+                                    count++;
+                                }
+                            }
+                        }
+                        output_channel_ptr[oh * out_w + ow] = sum / count;
+                    }
+                }
+            }                 
+        }
+    }
+
+\end{lstlisting}
 
 \subsection{Gauss-Seidel迭代法实现}
 
 \subsubsection{2D红黑排序实现}
+\begin{lstlisting}[caption={2D红黑排序并行实现}, label={lst:gauss_seidel_2d}]
+// gauss_seidel_2d.cpp 核心代码
+void solve_parallel_redblack(/* ... */) {
+    omp_set_num_threads(num_threads);
+    for (int iter = 0; iter < max_iter; ++iter) {
+        // === 红点更新阶段 ===
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (int bi = 1; bi <= N; bi += tile_size) {
+            for (int bj = 1; bj <= N; bj += tile_size) {
+                // 块内更新红点
+                for (int i = bi; i < i_end; ++i) {
+                    // 关键优化：直接步长为2，无条件判断
+                    int j_start = ((i + bi) % 2 == 0) ? bi : bi + 1;
+                    for (int j = j_start; j < j_end; j += 2) {
+                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
+                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
+                    }
+                }
+            }
+        }
+        #pragma omp barrier  // 确保所有红点更新完成
+        // === 黑点更新阶段 ===
+        #pragma omp for schedule(static) collapse(2) nowait
+        for (int bi = 1; bi <= N; bi += tile_size) {
+            for (int bj = 1; bj <= N; bj += tile_size) {
+                // 块内更新黑点（步长同样为2）
+                for (int i = bi; i < i_end; ++i) {
+                    int j_start = ((i + bi) % 2 == 1) ? bi : bi + 1;
+                    for (int j = j_start; j < j_end; j += 2) {
+                        U(i, j) = 0.25 * (U(i-1,j) + U(i+1,j) + 
+                                         U(i,j-1) + U(i,j+1) + h2 * F(i-1,j-1));
+                    }
+                }
+            }
+        }
+        #pragma omp barrier  // 确保所有黑点更新完成
+    }
+}
+\end{lstlisting}
 
-
+\begin{lstlisting}[caption={2D红黑排序两级分块实现}, label={lst:gauss_seidel_2d_tiled}]
+    // gauss_seidel_2d_tiled.cpp 核心代码
+void solve_4level_tiling(/* ... */) {
+    // 两级tiling参数
+    const int L3_TILE = (N >= 512) ? 128 : 64;  // 外层：L3 Cache块
+    const int L1_TILE = 16;                      // 内层：L1 Cache块
+    for (int iter = 0; iter < max_iter; ++iter) {
+        // === 红点更新：两级分块 ===
+        #pragma omp for schedule(static) nowait
+        for (int bi = 1; bi <= N; bi += L3_TILE) {
+            int bi_end = std::min(bi + L3_TILE, N + 1);
+            // L1 Cache级别的细粒度分块
+            for (int ti = bi; ti < bi_end; ti += L1_TILE) {
+                int ti_end = std::min(ti + L1_TILE, bi_end);
+                // 预取优化：提前加载下一个L1块
+                #ifdef __x86_64__
+                if (ti + L1_TILE < bi_end) {
+                    _mm_prefetch((const char*)&U(ti + L1_TILE, 1), _MM_HINT_T0);
+                }
+                #endif
+                // 内核循环：访问L1块内的红点
+                for (int i = ti; i < ti_end; ++i) {
+                    int j_start = (i % 2 == 1) ? 1 : 2;  // 红点起始位置
+                    for (int j = j_start; j <= N; j += 2) {
+                        // 显式寄存器缓存邻点值
+                        double reg[4];
+                        reg[0] = U(i-1, j);
+                        reg[1] = U(i+1, j);
+                        reg[2] = U(i, j-1);
+                        reg[3] = U(i, j+1);
+                        U(i, j) = 0.25 * (reg[0] + reg[1] + reg[2] + 
+                                reg[3] + h2 * F(i-1, j-1));
+                    }
+                }
+            }
+        }
+        #pragma omp barrier
+        // === 黑点更新：相同的两级分块策略 ===
+        // ... (结构相同)
+    }
+}
+\end{lstlisting}
 \subsubsection{3D红黑排序实现}
+\begin{lstlisting}[caption={3D红黑排序并行实现}, label={lst:gauss_seidel_3d}]
+            for (int iter = 0; iter < max_iter; ++iter) {
+            // 使用dynamic调度改善负载均衡
+            #pragma omp for schedule(dynamic, 2) collapse(3) nowait
+            for (int block_i = 1; block_i <= N; block_i += tile_size) {
+                for (int block_j = 1; block_j <= N; block_j += tile_size) {
+                    for (int block_k = 1; block_k <= N; block_k += tile_size) {
+                        int i_end = std::min(block_i + tile_size, N + 1);
+                        int j_end = std::min(block_j + tile_size, N + 1);
+                        int k_end = std::min(block_k + tile_size, N + 1);
+                        // ============ 改进2: 块内先红后黑，消除条件分支 ============
+                        // 红点更新
+                        for (int i = block_i; i < i_end; ++i) {
+                            // 根据i的奇偶性确定j的起始奇偶
+                            for (int j = block_j; j < j_end; ++j) {
+                                // 计算k的起始值，确保(i+j+k)%2==0
+                                int k_start = block_k + ((i + j + block_k) % 2 == 0 ? 0 : 1);
+                                // k每次跳2，只访问红点
+                                for (int k = k_start; k < k_end; k += 2) {
+                                    // ============ 改进3: 使用寄存器缓存，减少内存访问 ============
+                                    double u_im = U(i-1, j, k);
+                                    double u_ip = U(i+1, j, k);
+                                    double u_jm = U(i, j-1, k);
+                                    double u_jp = U(i, j+1, k);
+                                    double u_km = U(i, j, k-1);
+                                    double u_kp = U(i, j, k+1);
+                                    double f_val = local_h2 * F(i-1, j-1, k-1);
+                                    
+                                    U(i, j, k) = local_inv6 * (u_im + u_ip + u_jm + u_jp + u_km + u_kp + f_val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 只在红点全部更新后同步一次
+            #pragma omp barrier
+            //黑点更新，结构类似
+        }
+\end{lstlisting}
 
-
+\begin{lstlisting}[caption={3D红黑排序两级分块实现}, label={lst:gauss_seidel_3d_tiled}]
+        #pragma omp parallel num_threads(num_threads)
+    {
+        // 线程局部变量：避免重复计算和false sharing
+        double local_h2 = h2;
+        double local_inv6 = inv6;
+        for (int iter = 0; iter < max_iter; ++iter) {
+            // ========== 红点更新 (i+j+k)%2==0 ==========
+            // 使用静态调度减少调度开销，块数足够多时static更高效
+            #pragma omp for schedule(static) collapse(3) nowait
+            for (int block_i = 1; block_i <= N; block_i += TILE_SIZE) {
+                for (int block_j = 1; block_j <= N; block_j += TILE_SIZE) {
+                    for (int block_k = 1; block_k <= N; block_k += TILE_SIZE) {
+                        int i_end = std::min(block_i + TILE_SIZE, N + 1);
+                        int j_end = std::min(block_j + TILE_SIZE, N + 1);
+                        int k_end = std::min(block_k + TILE_SIZE, N + 1);
+                        // 在块内更新红点 - k循环直接跳2步
+                        for (int i = block_i; i < i_end; ++i) {
+                            for (int j = block_j; j < j_end; ++j) {
+                                // 计算k的起始值，确保(i+j+k)%2==0
+                                int k_start = block_k + ((i + j + block_k) % 2 == 0 ? 0 : 1);
+                                // k每次跳2，只访问红点，无需条件判断
+                                for (int k = k_start; k < k_end; k += 2) {
+                                    // 寄存器缓存：减少内存访问
+                                    double u_im = U(i-1, j, k);
+                                    double u_ip = U(i+1, j, k);
+                                    double u_jm = U(i, j-1, k);
+                                    double u_jp = U(i, j+1, k);
+                                    double u_km = U(i, j, k-1);
+                                    double u_kp = U(i, j, k+1);
+                                    double f_val = local_h2 * F(i-1, j-1, k-1);
+                                    
+                                    U(i, j, k) = local_inv6 * (u_im + u_ip + u_jm + u_jp + u_km + u_kp + f_val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            #pragma omp barrier
+            //黑点更新同理，实现方法相同
+\end{lstlisting}
 \subsection{三对角方程组求解实现}
 
 \subsubsection{Sequential Thomas算法}
-
+\begin{lstlisting}[caption={Sequential Thomas算法实现}, label={lst:thomas_sequential}]
+    vector<double> thomas_solver(int n, 
+                            const vector<double>& a,
+                            const vector<double>& b,
+                            const vector<double>& c,
+                            const vector<double>& d) {
+    vector<double> gamma(n, 0.0);
+    vector<double> rho(n, 0.0);
+    // 前向消元
+    gamma[0] = c[0] / b[0];
+    rho[0] = d[0] / b[0];
+    for (int i = 1; i < n; i++) {
+        double denom = b[i] - a[i] * gamma[i-1];
+        if (i < n - 1) {
+            gamma[i] = c[i] / denom;
+        }
+        rho[i] = (d[i] - a[i] * rho[i-1]) / denom;
+    }
+    // 回代
+    vector<double> x(n, 0.0);
+    x[n-1] = rho[n-1];
+    for (int i = n - 2; i >= 0; i--) {
+        x[i] = rho[i] - gamma[i] * x[i+1];
+    }
+    return x;
+}
+\end{lstlisting}
 
 \subsubsection{Brugnano并行算法}
-
+\begin{lstlisting}[caption={Brugnano并行算法实现}, label={lst:thomas_brugnano}]
+    void thomas_brugnano(int n,
+                    const vector<double>& global_a,
+                    const vector<double>& global_b,
+                    const vector<double>& global_c,
+                    const vector<double>& global_d,
+                    vector<double>& global_x,
+                    int num_threads) {
+    vector<int> chunk_sizes(num_threads);
+    vector<int> start_indices(num_threads);
+    int base = n / num_threads;
+    int rem = n % num_threads;
+    int cur = 0;
+    for (int i = 0; i < num_threads; i++) {
+        chunk_sizes[i] = base + (i < rem ? 1 : 0);
+        start_indices[i] = cur;
+        cur += chunk_sizes[i];
+    }
+    vector<vector<double>> all_coefs(num_threads, vector<double>(6));
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        int start_idx = start_indices[tid];
+        int m = chunk_sizes[tid];
+        vector<double> local_a(m), local_b(m), local_c(m), local_d(m);
+        for (int i = 0; i < m; i++) {
+            int gi = start_idx + i;
+            local_a[i] = global_a[gi];
+            local_b[i] = global_b[gi];
+            local_c[i] = global_c[gi];
+            local_d[i] = global_d[gi];
+        }
+        if (m == 1) {
+            local_d[0] /= local_b[0];
+            local_a[0] = local_c[0] = 0.0;
+        } else {
+            modified_thomas_algorithm(m, local_a, local_b, local_c, local_d);
+        }
+        all_coefs[tid][0] = local_a[0];
+        all_coefs[tid][1] = local_c[0];
+        all_coefs[tid][2] = local_d[0];
+        all_coefs[tid][3] = local_a[m-1];
+        all_coefs[tid][4] = local_c[m-1];
+        all_coefs[tid][5] = local_d[m-1];
+        
+        #pragma omp barrier
+        
+        #pragma omp single
+        {
+            int R = 2 * num_threads;
+            vector<double> ra(R, 0.0), rb(R, 1.0), rc(R, 0.0), rd(R);
+            for (int i = 0; i < num_threads; i++) {
+                int e1 = 2 * i;
+                int e2 = 2 * i + 1;
+                ra[e1] = all_coefs[i][0];
+                rc[e1] = all_coefs[i][1];
+                rd[e1] = all_coefs[i][2];
+                ra[e2] = all_coefs[i][3];
+                rc[e2] = all_coefs[i][4];
+                rd[e2] = all_coefs[i][5];
+            }
+            for (int i = 0; i < num_threads - 1; i++) {
+                int curr_end = 2 * i + 1;
+                int next_start = 2 * (i + 1);
+                rc[curr_end] = -ra[next_start];
+                ra[next_start] = -rc[curr_end];
+            }
+            standard_thomas_solver(R, ra, rb, rc, rd);
+            for (int i = 0; i < num_threads; i++) {
+                int s = start_indices[i];
+                int e = s + chunk_sizes[i] - 1;
+                global_x[s] = rd[2*i];
+                global_x[e] = rd[2*i+1];
+            }
+        }
+        #pragma omp barrier
+        int s = start_idx;
+        double d0 = global_x[s];
+        double dN = global_x[s + m - 1];
+        
+        for (int i = 1; i < m - 1; i++) {
+            global_x[s + i] = local_d[i] - local_a[i] * d0 - local_c[i] * dN;
+        }
+    }
+}
+\end{lstlisting}
 
 \subsubsection{Recursive Doubling算法}
-
+\begin{lstlisting}[caption={Recursive Doubling并行算法实现}, label={lst:thomas_recursive_doubling}]
+    void thomas_recursive_doubling(int n,
+                               const vector<double>& a,
+                               const vector<double>& b,
+                               const vector<double>& c,
+                               const vector<double>& q,
+                               vector<double>& x,
+                               int num_threads) {
+    vector<array<double, 4>> R_store(num_threads);
+    vector<double> d(n), l(n);
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        int base = n / num_threads;
+        int rem = n % num_threads;
+        int local_rows = (tid < rem ? base + 1 : base);
+        int offset = (tid < rem ? tid * (base + 1) : rem * (base + 1) + (tid - rem) * base);
+        double R00 = 1.0, R01 = 0.0;
+        double R10 = 0.0, R11 = 1.0;
+        for (int i = 0; i < local_rows; i++) {
+            int idx = offset + i;
+            double a_val = a[idx];
+            double mult = (idx > 0 ? b[idx-1] * c[idx-1] : 0.0);
+            
+            double tmp0 = a_val * R00 - mult * R10;
+            double tmp1 = a_val * R01 - mult * R11;
+            R10 = R00;
+            R11 = R01;
+            R00 = tmp0;
+            R01 = tmp1;
+            
+            double scale = max({abs(R00), abs(R01), abs(R10), abs(R11)});
+            if (scale > 0) {
+                R00 /= scale; R01 /= scale;
+                R10 /= scale; R11 /= scale;
+            }
+        }
+        R_store[tid] = {R00, R01, R10, R11};
+        #pragma omp barrier
+        int stages = (int)log2(num_threads);
+        for (int s = 0; s < stages; s++) {
+            int dist = 1 << s;
+            auto my_R = R_store[tid];
+            int partner = (tid >= dist ? tid - dist : tid + dist);
+            auto p_R = R_store[partner];
+            
+            double n00 = my_R[0] * p_R[0] + my_R[1] * p_R[2];
+            double n01 = my_R[0] * p_R[1] + my_R[1] * p_R[3];
+            double n10 = my_R[2] * p_R[0] + my_R[3] * p_R[2];
+            double n11 = my_R[2] * p_R[1] + my_R[3] * p_R[3];
+            
+            double scale = max({abs(n00), abs(n01), abs(n10), abs(n11)});
+            if (scale > 0) {
+                n00 /= scale; n01 /= scale;
+                n10 /= scale; n11 /= scale;
+            }
+            
+            R_store[tid] = {n00, n01, n10, n11};
+            #pragma omp barrier
+        }
+        double p_sum = 0.0, q_sum = 0.0;
+        for (int i = 0; i < local_rows; i++) {
+            int idx = offset + i;
+            p_sum += b[idx];
+            q_sum += b[idx] * q[idx];
+        }
+        d[tid] = p_sum;
+        l[tid] = q_sum;
+        #pragma omp barrier
+        for (int s = 0; s < stages; s++) {
+            int dist = 1 << s;
+            if (tid >= dist) {
+                int partner = tid - dist;
+                d[tid] += d[partner];
+                l[tid] += l[partner];
+            }
+            #pragma omp barrier
+        }
+        for (int i = 0; i < local_rows; i++) {
+            int idx = offset + i;
+            x[idx] = (q[idx] - (idx > 0 ? c[idx-1] * x[idx-1] : 0.0)) / b[idx];
+        }
+    }
+}
+\end{lstlisting}
 
 
 %% ========================================
